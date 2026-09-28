@@ -1,0 +1,12 @@
+{
+  "modelPackage": "com.strandls.externalOccurrences.pojo",
+  "apiPackage": "com.strandls.externalOccurrences.controllers",
+  "invokerPackage": "com.strandls.externalOccurrences",
+  "groupId": "com.strandls.externalOccurrences",
+  "artifactId": "externalOccurrences-client",
+  "artifactVersion": "1.0.0",
+  "fullJavaUtil": true,
+  "dateLibrary": "legacy",
+  "library": "jersey2",
+  "java8": true
+}
