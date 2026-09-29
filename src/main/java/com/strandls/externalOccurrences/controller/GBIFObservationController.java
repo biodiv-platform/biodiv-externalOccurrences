@@ -14,6 +14,7 @@ import com.strandls.externalOccurrences.ApiConstants;
 import com.strandls.externalOccurrences.exception.ExternalOccurrencesException;
 import com.strandls.externalOccurrences.pojo.response.GBIFObservationResponse;
 import com.strandls.externalOccurrences.pojo.response.IUCNAggregationResponse;
+import com.strandls.externalOccurrences.pojo.response.OccurrenceLocationResponse;
 import com.strandls.externalOccurrences.pojo.response.SpeciesGroupAggregationResponse;
 import com.strandls.externalOccurrences.service.GBIFObservationService;
 
@@ -77,6 +78,23 @@ public class GBIFObservationController {
 			throws ExternalOccurrencesException {
 		try {
 			IUCNAggregationResponse response = gbifObservationService.getIUCNAggregation(geoJson);
+			return Response.status(Status.OK).entity(response).build();
+		} catch (Exception e) {
+			throw new ExternalOccurrencesException(e);
+		}
+	}
+
+	@POST
+	@Path(ApiConstants.OCCURRENCE_LOCATIONS)
+	@Consumes(MediaType.APPLICATION_JSON)
+	@Produces(MediaType.APPLICATION_JSON)
+	@ApiOperation(value = "Get GBIF occurrence locations for a geometry", notes = "Returns GBIF occurrences grouped by location, flagging those inside the geometry", response = OccurrenceLocationResponse.class)
+	@ApiResponses(value = { @ApiResponse(code = 404, message = "Could not get the data", response = String.class) })
+	public Response getOccurrenceLocations(@QueryParam("limit") Integer limit,
+			@QueryParam("speciesGroup") String speciesGroup, @QueryParam("iucnCategory") String iucnCategory,
+			@ApiParam(name = "geoJson") String geoJson) throws ExternalOccurrencesException {
+		try {
+			OccurrenceLocationResponse response = gbifObservationService.getOccurrenceLocations(geoJson, limit, speciesGroup, iucnCategory);
 			return Response.status(Status.OK).entity(response).build();
 		} catch (Exception e) {
 			throw new ExternalOccurrencesException(e);

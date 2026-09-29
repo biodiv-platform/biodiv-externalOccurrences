@@ -3,6 +3,7 @@ package com.strandls.externalOccurrences.service.impl;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -10,10 +11,12 @@ import org.slf4j.LoggerFactory;
 
 import com.strandls.externalOccurrences.ExternalOccurrencesConfig;
 import com.strandls.externalOccurrences.pojo.IUCNAggregation;
+import com.strandls.externalOccurrences.pojo.OccurrenceLocation;
 import com.strandls.externalOccurrences.pojo.SpeciesAggregation;
 import com.strandls.externalOccurrences.pojo.SpeciesGroupAggregation;
 import com.strandls.externalOccurrences.pojo.response.GBIFObservationResponse;
 import com.strandls.externalOccurrences.pojo.response.IUCNAggregationResponse;
+import com.strandls.externalOccurrences.pojo.response.OccurrenceLocationResponse;
 import com.strandls.externalOccurrences.pojo.response.SpeciesGroupAggregationResponse;
 import com.strandls.externalOccurrences.service.GBIFObservationService;
 import com.strandls.externalOccurrences.util.DuckDBUtil;
@@ -22,6 +25,8 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 
 	private final Logger logger = LoggerFactory.getLogger(GBIFObservationServiceImpl.class);
 	private static final double GBIF_POINT_PADDING;
+	private static final int DEFAULT_LOCATION_LIMIT = 5000;
+	private static final int MAX_LOCATION_LIMIT = 10000;
 
 	static {
 		// Load padding value from config
@@ -131,6 +136,58 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 			+ "FROM all_categories ac "
 			+ "LEFT JOIN observed_counts oc ON ac.category = oc.iucnRedListCategory "
 			+ "ORDER BY totalCount DESC";
+	}
+
+	/**
+	 * Occurrences are grouped on coordinates rounded to 4 decimals (~11m); the
+	 * inside test runs on the rounded point. Locations inside the geometry are
+	 * ordered first so they survive the LIMIT. The bbox is LEFT JOINed so it is
+	 * returned even when there are no occurrences. %%FILTERS%% (%FILTERS% after
+	 * String.format) is replaced with
+	 * the optional species group / IUCN filters.
+	 */
+	private static String buildOccurrenceLocationQueryTemplate(double padding) {
+		return "WITH input AS (" + "    SELECT ? AS geojson" + "), "
+			+ "geom AS (" + "    SELECT" + "        ST_GeomFromGeoJSON("
+			+ "            json_extract(geojson, '$.features[0].geometry')::VARCHAR" + "        ) AS shape,"
+			+ "        json_extract(geojson, '$.features[0].geometry.type')::VARCHAR AS geom_type"
+			+ "    FROM input" + "), " + "bbox AS (" + "    SELECT"
+			+ "        CASE WHEN geom_type = '\"Point\"'"
+			+ "            THEN ST_YMin(shape) - " + padding + "            ELSE ST_YMin(shape)"
+			+ "        END AS min_lat," + "        CASE WHEN geom_type = '\"Point\"'"
+			+ "            THEN ST_YMax(shape) + " + padding + "            ELSE ST_YMax(shape)"
+			+ "        END AS max_lat," + "        CASE WHEN geom_type = '\"Point\"'"
+			+ "            THEN ST_XMin(shape) - " + padding + "            ELSE ST_XMin(shape)"
+			+ "        END AS min_lon," + "        CASE WHEN geom_type = '\"Point\"'"
+			+ "            THEN ST_XMax(shape) + " + padding + "            ELSE ST_XMax(shape)" + "        END AS max_lon"
+			+ "    FROM geom" + "), "
+			+ "grouped AS ("
+			+ "    SELECT ROUND(o.decimalLatitude, 4) AS lat, ROUND(o.decimalLongitude, 4) AS lon,"
+			+ "        COUNT(*) AS recordCount, COUNT(DISTINCT o.scientificName) AS speciesCount"
+			+ "    FROM '%s' o, bbox"
+			+ "    WHERE o.decimalLatitude  BETWEEN bbox.min_lat AND bbox.max_lat"
+			+ "      AND o.decimalLongitude BETWEEN bbox.min_lon AND bbox.max_lon"
+			+ "      AND o.decimalLatitude  IS NOT NULL" + "      AND o.decimalLongitude IS NOT NULL"
+			+ "      AND o.scientificName IS NOT NULL"
+			+ "      %%FILTERS%%"
+			+ "    GROUP BY 1, 2" + "), "
+			+ "flagged AS ("
+			+ "    SELECT g.*,"
+			+ "        CASE WHEN geom.geom_type IN ('\"Polygon\"', '\"MultiPolygon\"')"
+			+ "            THEN ST_Intersects(geom.shape, ST_Point(g.lon, g.lat))"
+			+ "            ELSE false"
+			+ "        END AS insideGeometry"
+			+ "    FROM grouped g, geom" + "), "
+			+ "limited AS ("
+			+ "    SELECT *,"
+			+ "        COUNT(*) OVER () AS totalLocations,"
+			+ "        SUM(recordCount) OVER ()::BIGINT AS totalRecords,"
+			+ "        SUM(CASE WHEN insideGeometry THEN recordCount ELSE 0 END) OVER ()::BIGINT AS insideRecords"
+			+ "    FROM flagged"
+			+ "    ORDER BY insideGeometry DESC, recordCount DESC"
+			+ "    LIMIT ?" + ") "
+			+ "SELECT bbox.*, limited.* FROM bbox LEFT JOIN limited ON true"
+			+ " ORDER BY limited.insideGeometry DESC, limited.recordCount DESC";
 	}
 
 	@Override
@@ -412,6 +469,91 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		} catch (Exception e) {
 			logger.error("Error executing DuckDB IUCN aggregation query", e);
 			return new ArrayList<>();
+		}
+	}
+
+	@Override
+	public OccurrenceLocationResponse getOccurrenceLocations(String geoJson, Integer limit, String speciesGroup,
+			String iucnCategory) {
+		if (limit == null || limit <= 0) {
+			limit = DEFAULT_LOCATION_LIMIT;
+		}
+		limit = Math.min(limit, MAX_LOCATION_LIMIT);
+
+		OccurrenceLocationResponse empty = new OccurrenceLocationResponse(null, 0L, 0L, 0L, false, new ArrayList<>());
+
+		if (geoJson == null || geoJson.isEmpty()) {
+			logger.warn("No geometry provided");
+			return empty;
+		}
+
+		String parquetPath = ExternalOccurrencesConfig.getProperty("gbif_parquet_path");
+		if (parquetPath == null || parquetPath.isEmpty()) {
+			logger.error("GBIF parquet file path not configured");
+			return empty;
+		}
+
+		final int locationLimit = limit;
+		try {
+			return DuckDBUtil.withConnection(conn -> {
+				String filterClause = "";
+				if (speciesGroup != null && !speciesGroup.isEmpty()) {
+					filterClause += " AND o.species_group = ?";
+				}
+				if (iucnCategory != null && !iucnCategory.isEmpty()) {
+					filterClause += " AND o.iucnRedListCategory = ?";
+				}
+				String query = String.format(buildOccurrenceLocationQueryTemplate(GBIF_POINT_PADDING), parquetPath)
+						.replace("%FILTERS%", filterClause);
+
+				logger.debug("Executing DuckDB occurrence location query with limit: {}, speciesGroup: {}, iucnCategory: {}",
+						locationLimit, speciesGroup, iucnCategory);
+
+				try (PreparedStatement stmt = conn.prepareStatement(query)) {
+					int paramIndex = 1;
+					stmt.setString(paramIndex++, geoJson);
+					if (speciesGroup != null && !speciesGroup.isEmpty()) {
+						stmt.setString(paramIndex++, speciesGroup);
+					}
+					if (iucnCategory != null && !iucnCategory.isEmpty()) {
+						stmt.setString(paramIndex++, iucnCategory);
+					}
+					stmt.setInt(paramIndex++, locationLimit);
+
+					OccurrenceLocationResponse response = new OccurrenceLocationResponse(null, 0L, 0L, 0L, false,
+							new ArrayList<>());
+
+					try (ResultSet rs = stmt.executeQuery()) {
+						while (rs.next()) {
+							if (response.getBbox() == null) {
+								response.setBbox(Arrays.asList(rs.getDouble("min_lon"), rs.getDouble("min_lat"),
+										rs.getDouble("max_lon"), rs.getDouble("max_lat")));
+							}
+							// LEFT JOIN yields a single all-null row when there are no occurrences
+							if (rs.getObject("lat") == null) {
+								continue;
+							}
+							response.setTotalLocations(rs.getLong("totalLocations"));
+							response.setTotalRecords(rs.getLong("totalRecords"));
+							response.setInsideRecords(rs.getLong("insideRecords"));
+							response.getLocations().add(new OccurrenceLocation(rs.getDouble("lat"), rs.getDouble("lon"),
+									rs.getLong("recordCount"), rs.getLong("speciesCount"),
+									rs.getBoolean("insideGeometry")));
+						}
+					}
+
+					response.setTruncated(response.getTotalLocations() > response.getLocations().size());
+
+					logger.info("Found {} occurrence locations (returned: {}, total records: {}, inside records: {})",
+							response.getTotalLocations(), response.getLocations().size(), response.getTotalRecords(),
+							response.getInsideRecords());
+
+					return response;
+				}
+			});
+		} catch (Exception e) {
+			logger.error("Error executing DuckDB occurrence location query", e);
+			return empty;
 		}
 	}
 }
