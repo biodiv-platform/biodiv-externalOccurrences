@@ -32,7 +32,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 	private static final int MAX_LOCATION_LIMIT = 10000;
 
 	static {
-		DEFAULT_BUFFER_KM = readDouble("gbif_buffer_km", 10);
+		DEFAULT_BUFFER_KM = readDouble("gbif_buffer_km", 1);
 		MAX_BUFFER_KM = readDouble("gbif_max_buffer_km", 100);
 	}
 

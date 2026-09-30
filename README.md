@@ -16,7 +16,7 @@ Every geometry part is grown by `bufferKm`, and the search area is the union of 
 
 Buffers are true kilometres at any latitude (each part is buffered in a local azimuthal equidistant projection). At `bufferKm=0` points and lines contribute no area.
 
-All endpoints take `bufferKm` (default `gbif_buffer_km`, range 0 to `gbif_max_buffer_km`).
+All endpoints take `bufferKm` (default `gbif_buffer_km`, 1 km; range 0 to `gbif_max_buffer_km`), which applies to every geometry.
 
 | Path | Query params | Response |
 |---|---|---|
@@ -41,7 +41,7 @@ Content-Type: application/json
 | Key | |
 |---|---|
 | `gbif_parquet_path` | GBIF occurrence parquet file |
-| `gbif_buffer_km` | Buffer used when `bufferKm` is not sent (default 10) |
+| `gbif_buffer_km` | Buffer used when `bufferKm` is not sent (default 1) |
 | `gbif_max_buffer_km` | Largest `bufferKm` accepted (default 100) |
 | `duckdb_database_path` | DuckDB file; holds the installed spatial extension |
 | `duckdb_memory_limit` | Shared by all queries (default 50MB) |
