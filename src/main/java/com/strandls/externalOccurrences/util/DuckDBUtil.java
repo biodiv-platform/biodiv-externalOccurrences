@@ -94,6 +94,33 @@ public class DuckDBUtil {
 	}
 
 	/**
+	 * search_area(geojson, buffer_m): the GeoJSON geometry grown by buffer_m
+	 * metres, as a one-row table with the area a and its bounding box x0, x1, y0,
+	 * y1. Points become circles, lines corridors, and polygons grow outward
+	 * keeping their shape (mitre joins keep corners sharp); overlapping parts
+	 * merge. ST_Buffer is planar, so the geometry is buffered in an azimuthal
+	 * equidistant projection centred on it, where units are metres, and
+	 * transformed back to lon/lat. A zero buffer uses the geometry as-is so
+	 * polygons stay exact.
+	 */
+	private static final String SEARCH_AREA_MACRO = "CREATE OR REPLACE MACRO search_area(geojson, buffer_m) AS TABLE"
+			+ " WITH input AS (SELECT ST_MakeValid(ST_GeomFromGeoJSON(geojson)) AS g),"
+			+ " local AS ("
+			+ "   SELECT g, printf('+proj=aeqd +lat_0=%f +lon_0=%f +datum=WGS84 +units=m',"
+			+ "     ST_Y(ST_Centroid(g)), ST_X(ST_Centroid(g))) AS crs"
+			+ "   FROM input"
+			+ " ),"
+			+ " buffered AS ("
+			+ "   SELECT CASE WHEN buffer_m = 0 THEN g"
+			+ "     ELSE ST_Transform("
+			+ "       ST_Buffer(ST_Transform(g, 'EPSG:4326', crs, always_xy := true), buffer_m, 16, 'CAP_ROUND', 'JOIN_MITRE', 5.0),"
+			+ "       crs, 'EPSG:4326', always_xy := true)"
+			+ "   END AS a"
+			+ "   FROM local"
+			+ " )"
+			+ " SELECT a, ST_XMin(a) AS x0, ST_XMax(a) AS x1, ST_YMin(a) AS y0, ST_YMax(a) AS y1 FROM buffered";
+
+	/**
 	 * Initialize the DuckDB database with required extensions and settings.
 	 */
 	private void initializeDatabase(String dbPath, String memoryLimit, String tempDir) throws SQLException {
@@ -116,6 +143,10 @@ public class DuckDBUtil {
 				logger.info("Installing spatial extension...");
 				stmt.execute("INSTALL spatial");
 				stmt.execute("LOAD spatial"); // Load for this initialization connection
+
+				// Search area used by the GBIF queries; persists in the database file
+				logger.info("Creating search_area macro...");
+				stmt.execute(SEARCH_AREA_MACRO);
 
 				logger.info("DuckDB database initialized successfully with spatial extension");
 			}
