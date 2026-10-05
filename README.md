@@ -23,7 +23,7 @@ All endpoints take `bufferKm` (default `gbif_buffer_km`, 1 km; range 0 to `gbif_
 | `/observations` | `offset` (0), `limit` (10), `speciesGroup`, `iucnCategory`, `bufferKm` | Species in the area with record counts, paginated |
 | `/species-group-aggregation` | `bufferKm` | Records and species per species group, `Others` last |
 | `/iucn-aggregation` | `bufferKm` | Records and species per IUCN category, including categories with zero |
-| `/occurrence-locations` | `limit` (5000, max 10000), `speciesGroup`, `iucnCategory`, `bufferKm` | Locations in the search area's bounding box, flagged `insideGeometry` when inside the search area |
+| `/occurrence-locations` | `limit` (5000, max 10000), `speciesGroup`, `iucnCategory`, `bufferKm` | Locations in the search area's bounding box, flagged `insideGeometry` (inside the search area) and `insidePolygon` (inside the input's own polygons). Also returns the exact `searchArea` as GeoJSON, the `bufferKm` used, and record totals `insideRecords` and `polygonRecords`, so a map can draw exactly what was counted |
 
 Invalid GeoJSON, coordinates out of range or a `bufferKm` out of range return `400`.
 

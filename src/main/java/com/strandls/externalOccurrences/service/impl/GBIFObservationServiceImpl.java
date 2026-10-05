@@ -6,9 +6,14 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import com.strandls.externalOccurrences.ExternalOccurrencesConfig;
 import com.strandls.externalOccurrences.pojo.IUCNAggregation;
@@ -26,6 +31,7 @@ import com.strandls.externalOccurrences.util.GeoJsonUtil;
 public class GBIFObservationServiceImpl implements GBIFObservationService {
 
 	private final Logger logger = LoggerFactory.getLogger(GBIFObservationServiceImpl.class);
+	private static final ObjectMapper MAPPER = new ObjectMapper();
 	private static final double DEFAULT_BUFFER_KM;
 	private static final double MAX_BUFFER_KM;
 	private static final int DEFAULT_LOCATION_LIMIT = 5000;
@@ -100,10 +106,12 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 	/**
 	 * Returns every occurrence location in the search area's bounding box,
 	 * grouped on coordinates rounded to 4 decimals (~11m). A location is inside
-	 * when any of its records falls inside the search area, and insideRecords
-	 * counts exactly the records the other endpoints count. Inside locations are
-	 * ordered first so they survive the LIMIT. The area is LEFT JOINed so its
-	 * bbox is returned even when there are no occurrences. %%FILTERS%% (%FILTERS%
+	 * the search area (or the input's own polygons) when any of its raw records
+	 * is, so insideRecords counts exactly the records the other endpoints count,
+	 * and polygonRecords the ones inside the polygons themselves. Locations inside
+	 * the polygons, then the search area, are ordered first so they survive the
+	 * LIMIT. The area is LEFT JOINed so it is returned even when there are no
+	 * occurrences. %%FILTERS%% (%FILTERS%
 	 * after String.format) is replaced with the optional species group / IUCN
 	 * filters.
 	 */
@@ -112,23 +120,26 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 			+ "grouped AS ("
 			+ "    SELECT ROUND(o.decimalLatitude, 4) AS lat, ROUND(o.decimalLongitude, 4) AS lon,"
 			+ "        COUNT(*) AS recordCount, COUNT(DISTINCT o.scientificName) AS speciesCount,"
-			+ "        COUNT(*) FILTER (WHERE" + IN_AREA + ") AS insideCount"
+			+ "        COUNT(*) FILTER (WHERE" + IN_AREA + ") AS insideCount,"
+			+ "        COUNT(*) FILTER (WHERE ST_Intersects(area.polygons, ST_Point(o.decimalLongitude, o.decimalLatitude))) AS polygonCount"
 			+ "    FROM '%s' o, area"
 			+ "    WHERE" + IN_EXTENT
 			+ "      AND o.scientificName IS NOT NULL"
 			+ "      %%FILTERS%%"
 			+ "    GROUP BY 1, 2" + "), "
 			+ "limited AS ("
-			+ "    SELECT *, insideCount > 0 AS insideGeometry,"
+			+ "    SELECT *, insideCount > 0 AS insideGeometry, polygonCount > 0 AS insidePolygon,"
 			+ "        COUNT(*) OVER () AS totalLocations,"
 			+ "        SUM(recordCount) OVER ()::BIGINT AS totalRecords,"
-			+ "        SUM(insideCount) OVER ()::BIGINT AS insideRecords"
+			+ "        SUM(insideCount) OVER ()::BIGINT AS insideRecords,"
+			+ "        SUM(polygonCount) OVER ()::BIGINT AS polygonRecords"
 			+ "    FROM grouped"
-			+ "    ORDER BY insideGeometry DESC, recordCount DESC"
+			+ "    ORDER BY insidePolygon DESC, insideGeometry DESC, recordCount DESC"
 			+ "    LIMIT ?" + ") "
-			+ "SELECT area.x0 AS min_lon, area.y0 AS min_lat, area.x1 AS max_lon, area.y1 AS max_lat, limited.*"
+			+ "SELECT area.x0 AS min_lon, area.y0 AS min_lat, area.x1 AS max_lon, area.y1 AS max_lat,"
+			+ "    ST_AsGeoJSON(area.a) AS search_area, limited.*"
 			+ " FROM area LEFT JOIN limited ON true"
-			+ " ORDER BY limited.insideGeometry DESC, limited.recordCount DESC";
+			+ " ORDER BY limited.insidePolygon DESC, limited.insideGeometry DESC, limited.recordCount DESC";
 	}
 
 	/**
@@ -433,7 +444,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		String geometries = GeoJsonUtil.toGeometryCollection(geoJson);
 		double bufferMeters = toBufferMeters(bufferKm);
 
-		OccurrenceLocationResponse empty = new OccurrenceLocationResponse(null, 0L, 0L, 0L, false, new ArrayList<>());
+		OccurrenceLocationResponse empty = emptyOccurrenceLocationResponse(bufferMeters);
 
 		String parquetPath = ExternalOccurrencesConfig.getProperty("gbif_parquet_path");
 		if (parquetPath == null || parquetPath.isEmpty()) {
@@ -454,14 +465,14 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 					int paramIndex = bindAreaAndFilters(stmt, geometries, bufferMeters, speciesGroup, iucnCategory);
 					stmt.setInt(paramIndex++, locationLimit);
 
-					OccurrenceLocationResponse response = new OccurrenceLocationResponse(null, 0L, 0L, 0L, false,
-							new ArrayList<>());
+					OccurrenceLocationResponse response = emptyOccurrenceLocationResponse(bufferMeters);
 
 					try (ResultSet rs = stmt.executeQuery()) {
 						while (rs.next()) {
 							if (response.getBbox() == null && rs.getObject("min_lon") != null) {
 								response.setBbox(Arrays.asList(rs.getDouble("min_lon"), rs.getDouble("min_lat"),
 										rs.getDouble("max_lon"), rs.getDouble("max_lat")));
+								response.setSearchArea(parseGeometry(rs.getString("search_area")));
 							}
 							// LEFT JOIN yields a single all-null row when there are no occurrences
 							if (rs.getObject("lat") == null) {
@@ -470,17 +481,18 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 							response.setTotalLocations(rs.getLong("totalLocations"));
 							response.setTotalRecords(rs.getLong("totalRecords"));
 							response.setInsideRecords(rs.getLong("insideRecords"));
+							response.setPolygonRecords(rs.getLong("polygonRecords"));
 							response.getLocations().add(new OccurrenceLocation(rs.getDouble("lat"), rs.getDouble("lon"),
 									rs.getLong("recordCount"), rs.getLong("speciesCount"),
-									rs.getBoolean("insideGeometry")));
+									rs.getBoolean("insideGeometry"), rs.getBoolean("insidePolygon")));
 						}
 					}
 
 					response.setTruncated(response.getTotalLocations() > response.getLocations().size());
 
-					logger.info("Found {} occurrence locations (returned: {}, total records: {}, inside records: {})",
+					logger.info("Found {} occurrence locations (returned: {}, total records: {}, inside records: {}, polygon records: {})",
 							response.getTotalLocations(), response.getLocations().size(), response.getTotalRecords(),
-							response.getInsideRecords());
+							response.getInsideRecords(), response.getPolygonRecords());
 
 					return response;
 				}
@@ -488,6 +500,28 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		} catch (Exception e) {
 			logger.error("Error executing DuckDB occurrence location query", e);
 			return empty;
+		}
+	}
+
+	private static OccurrenceLocationResponse emptyOccurrenceLocationResponse(double bufferMeters) {
+		OccurrenceLocationResponse response = new OccurrenceLocationResponse(null, 0L, 0L, 0L, false,
+				new ArrayList<>());
+		response.setPolygonRecords(0L);
+		response.setBufferKm(bufferMeters / 1000);
+		return response;
+	}
+
+	/** @return a GeoJSON geometry string as a map, so it is returned as JSON rather than a string */
+	private Map<String, Object> parseGeometry(String geoJson) {
+		if (geoJson == null) {
+			return null;
+		}
+		try {
+			return MAPPER.readValue(geoJson, new TypeReference<Map<String, Object>>() {
+			});
+		} catch (JsonProcessingException e) {
+			logger.error("Could not parse search area GeoJSON", e);
+			return null;
 		}
 	}
 }

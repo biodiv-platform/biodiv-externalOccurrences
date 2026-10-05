@@ -95,8 +95,9 @@ public class DuckDBUtil {
 
 	/**
 	 * search_area(geojson, buffer_m): the GeoJSON geometry grown by buffer_m
-	 * metres, as a one-row table with the area a and its bounding box x0, x1, y0,
-	 * y1. Points become circles, lines corridors, and polygons grow outward
+	 * metres, as a one-row table with the area a, its bounding box x0, x1, y0, y1,
+	 * and polygons: the input's own polygons without the buffer (empty when it has
+	 * none). Points become circles, lines corridors, and polygons grow outward
 	 * keeping their shape (mitre joins keep corners sharp); overlapping parts
 	 * merge. ST_Buffer is planar, so the geometry is buffered in an azimuthal
 	 * equidistant projection centred on it, where units are metres, and
@@ -115,10 +116,10 @@ public class DuckDBUtil {
 			+ "     ELSE ST_Transform("
 			+ "       ST_Buffer(ST_Transform(g, 'EPSG:4326', crs, always_xy := true), buffer_m, 16, 'CAP_ROUND', 'JOIN_MITRE', 5.0),"
 			+ "       crs, 'EPSG:4326', always_xy := true)"
-			+ "   END AS a"
+			+ "   END AS a, ST_CollectionExtract(g, 3) AS polygons"
 			+ "   FROM local"
 			+ " )"
-			+ " SELECT a, ST_XMin(a) AS x0, ST_XMax(a) AS x1, ST_YMin(a) AS y0, ST_YMax(a) AS y1 FROM buffered";
+			+ " SELECT a, ST_XMin(a) AS x0, ST_XMax(a) AS x1, ST_YMin(a) AS y0, ST_YMax(a) AS y1, polygons FROM buffered";
 
 	/**
 	 * Initialize the DuckDB database with required extensions and settings.

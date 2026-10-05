@@ -1,14 +1,23 @@
 package com.strandls.externalOccurrences.pojo.response;
 
 import java.util.List;
+import java.util.Map;
 
 import com.strandls.externalOccurrences.pojo.OccurrenceLocation;
 
 public class OccurrenceLocationResponse {
 	/** Bounding box that occurrences were searched in: [minLon, minLat, maxLon, maxLat] */
 	private List<Double> bbox;
+	/** The search area the records were counted in (the input grown by bufferKm), as a GeoJSON geometry */
+	private Map<String, Object> searchArea;
+	/** Buffer in km the search area was built with */
+	private Double bufferKm;
+	/** Records in the bounding box */
 	private Long totalRecords;
+	/** Records inside the search area */
 	private Long insideRecords;
+	/** Records inside the input's own polygons, without the buffer (0 when the input has no polygon) */
+	private Long polygonRecords;
 	private Long totalLocations;
 	private Boolean truncated;
 	private List<OccurrenceLocation> locations;
@@ -34,6 +43,22 @@ public class OccurrenceLocationResponse {
 		this.bbox = bbox;
 	}
 
+	public Map<String, Object> getSearchArea() {
+		return searchArea;
+	}
+
+	public void setSearchArea(Map<String, Object> searchArea) {
+		this.searchArea = searchArea;
+	}
+
+	public Double getBufferKm() {
+		return bufferKm;
+	}
+
+	public void setBufferKm(Double bufferKm) {
+		this.bufferKm = bufferKm;
+	}
+
 	public Long getTotalRecords() {
 		return totalRecords;
 	}
@@ -48,6 +73,14 @@ public class OccurrenceLocationResponse {
 
 	public void setInsideRecords(Long insideRecords) {
 		this.insideRecords = insideRecords;
+	}
+
+	public Long getPolygonRecords() {
+		return polygonRecords;
+	}
+
+	public void setPolygonRecords(Long polygonRecords) {
+		this.polygonRecords = polygonRecords;
 	}
 
 	public Long getTotalLocations() {

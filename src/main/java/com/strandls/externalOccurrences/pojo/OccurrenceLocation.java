@@ -9,18 +9,22 @@ public class OccurrenceLocation {
 	private Double longitude;
 	private Long recordCount;
 	private Long speciesCount;
+	/** Any record here is inside the search area (the input grown by the buffer) */
 	private Boolean insideGeometry;
+	/** Any record here is inside the input's own polygons, without the buffer */
+	private Boolean insidePolygon;
 
 	public OccurrenceLocation() {
 	}
 
 	public OccurrenceLocation(Double latitude, Double longitude, Long recordCount, Long speciesCount,
-			Boolean insideGeometry) {
+			Boolean insideGeometry, Boolean insidePolygon) {
 		this.latitude = latitude;
 		this.longitude = longitude;
 		this.recordCount = recordCount;
 		this.speciesCount = speciesCount;
 		this.insideGeometry = insideGeometry;
+		this.insidePolygon = insidePolygon;
 	}
 
 	public Double getLatitude() {
@@ -61,5 +65,13 @@ public class OccurrenceLocation {
 
 	public void setInsideGeometry(Boolean insideGeometry) {
 		this.insideGeometry = insideGeometry;
+	}
+
+	public Boolean getInsidePolygon() {
+		return insidePolygon;
+	}
+
+	public void setInsidePolygon(Boolean insidePolygon) {
+		this.insidePolygon = insidePolygon;
 	}
 }
