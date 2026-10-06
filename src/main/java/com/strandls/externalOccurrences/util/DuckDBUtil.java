@@ -98,8 +98,8 @@ public class DuckDBUtil {
 	 * metres, as a one-row table with the area a, its bounding box x0, x1, y0, y1,
 	 * and polygons: the input's own polygons without the buffer (empty when it has
 	 * none). Points become circles, lines corridors, and polygons grow outward
-	 * keeping their shape (mitre joins keep corners sharp); overlapping parts
-	 * merge. ST_Buffer is planar, so the geometry is buffered in an azimuthal
+	 * keeping their shape with rounded corners, so the edge of the area is
+	 * buffer_m from the geometry everywhere; overlapping parts merge. ST_Buffer is planar, so the geometry is buffered in an azimuthal
 	 * equidistant projection centred on it, where units are metres, and
 	 * transformed back to lon/lat. A zero buffer uses the geometry as-is so
 	 * polygons stay exact.
@@ -114,7 +114,7 @@ public class DuckDBUtil {
 			+ " buffered AS ("
 			+ "   SELECT CASE WHEN buffer_m = 0 THEN g"
 			+ "     ELSE ST_Transform("
-			+ "       ST_Buffer(ST_Transform(g, 'EPSG:4326', crs, always_xy := true), buffer_m, 16, 'CAP_ROUND', 'JOIN_MITRE', 5.0),"
+			+ "       ST_Buffer(ST_Transform(g, 'EPSG:4326', crs, always_xy := true), buffer_m, 16),"
 			+ "       crs, 'EPSG:4326', always_xy := true)"
 			+ "   END AS a, ST_CollectionExtract(g, 3) AS polygons"
 			+ "   FROM local"
