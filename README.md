@@ -12,7 +12,7 @@ Every geometry part is grown by `bufferKm`, and the search area is the union of 
 |---|---|
 | Point | Circle of radius `bufferKm` |
 | LineString | Corridor `bufferKm` either side |
-| Polygon | The same shape grown outward by `bufferKm` (sharp corners); at `bufferKm=0` the exact polygon |
+| Polygon | The same shape grown outward by `bufferKm` (rounded corners, so every edge is exactly `bufferKm` away); at `bufferKm=0` the exact polygon |
 
 Buffers are true kilometres at any latitude. At `bufferKm=0` the geometry is used as-is: polygons match exactly, and a point or line matches only occurrences exactly on it.
 
@@ -55,7 +55,7 @@ CREATE OR REPLACE MACRO search_area(geojson, buffer_m) AS TABLE
   buffered AS (
     SELECT CASE WHEN buffer_m = 0 THEN g
       ELSE ST_Transform(
-        ST_Buffer(ST_Transform(g, 'EPSG:4326', crs, always_xy := true), buffer_m, 16, 'CAP_ROUND', 'JOIN_MITRE', 5.0),
+        ST_Buffer(ST_Transform(g, 'EPSG:4326', crs, always_xy := true), buffer_m, 16),
         crs, 'EPSG:4326', always_xy := true)
     END AS a
     FROM local
