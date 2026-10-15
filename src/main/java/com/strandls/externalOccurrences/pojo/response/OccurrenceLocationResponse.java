@@ -8,9 +8,11 @@ import com.strandls.externalOccurrences.pojo.OccurrenceLocation;
 public class OccurrenceLocationResponse {
 	/** Bounding box that occurrences were searched in: [minLon, minLat, maxLon, maxLat] */
 	private List<Double> bbox;
-	/** The search area the records were counted in (the input grown by bufferKm), as a GeoJSON geometry */
+	/** The search area the records were counted in (the input grown by the buffers), as a GeoJSON geometry */
 	private Map<String, Object> searchArea;
-	/** Buffer in km the search area was built with */
+	/** Buffer in km the search area was built with around points */
+	private Double pointBufferKm;
+	/** Buffer in km the search area was built with around lines and polygons */
 	private Double bufferKm;
 	/** Records in the bounding box */
 	private Long totalRecords;
@@ -49,6 +51,14 @@ public class OccurrenceLocationResponse {
 
 	public void setSearchArea(Map<String, Object> searchArea) {
 		this.searchArea = searchArea;
+	}
+
+	public Double getPointBufferKm() {
+		return pointBufferKm;
+	}
+
+	public void setPointBufferKm(Double pointBufferKm) {
+		this.pointBufferKm = pointBufferKm;
 	}
 
 	public Double getBufferKm() {

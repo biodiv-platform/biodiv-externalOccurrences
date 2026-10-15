@@ -15,29 +15,32 @@ public interface GBIFObservationService {
 	 * @param limit The limit for pagination (default 10)
 	 * @param speciesGroup Optional species group filter
 	 * @param iucnCategory Optional IUCN Red List Category filter
-	 * @param bufferKm Buffer around every geometry part in km; null uses gbif_buffer_km
+	 * @param pointBufferKm Buffer around points in km; null uses gbif_point_buffer_km
+	 * @param bufferKm Buffer around lines and polygons in km; null uses gbif_buffer_km
 	 * @return Paginated response containing GBIF observations
 	 */
 	GBIFObservationResponse getObservations(String geoJson, Integer offset, Integer limit, String speciesGroup,
-			String iucnCategory, Double bufferKm);
+			String iucnCategory, Double pointBufferKm, Double bufferKm);
 
 	/**
 	 * Query GBIF observations aggregated by species group for a GeoJSON geometry
 	 *
 	 * @param geoJson Any GeoJSON (FeatureCollection, Feature, GeometryCollection or geometry)
-	 * @param bufferKm Buffer around every geometry part in km; null uses gbif_buffer_km
+	 * @param pointBufferKm Buffer around points in km; null uses gbif_point_buffer_km
+	 * @param bufferKm Buffer around lines and polygons in km; null uses gbif_buffer_km
 	 * @return Response containing species group aggregations with total and unique counts
 	 */
-	SpeciesGroupAggregationResponse getSpeciesGroupAggregation(String geoJson, Double bufferKm);
+	SpeciesGroupAggregationResponse getSpeciesGroupAggregation(String geoJson, Double pointBufferKm, Double bufferKm);
 
 	/**
 	 * Query GBIF observations aggregated by IUCN Red List Category for a GeoJSON geometry
 	 *
 	 * @param geoJson Any GeoJSON (FeatureCollection, Feature, GeometryCollection or geometry)
-	 * @param bufferKm Buffer around every geometry part in km; null uses gbif_buffer_km
+	 * @param pointBufferKm Buffer around points in km; null uses gbif_point_buffer_km
+	 * @param bufferKm Buffer around lines and polygons in km; null uses gbif_buffer_km
 	 * @return Response containing IUCN category aggregations with total and unique counts
 	 */
-	IUCNAggregationResponse getIUCNAggregation(String geoJson, Double bufferKm);
+	IUCNAggregationResponse getIUCNAggregation(String geoJson, Double pointBufferKm, Double bufferKm);
 
 	/**
 	 * Query GBIF occurrences in the bounding box of the search area, grouped by
@@ -47,9 +50,10 @@ public interface GBIFObservationService {
 	 * @param limit Max number of locations to return; locations inside the geometry come first
 	 * @param speciesGroup Optional species group filter
 	 * @param iucnCategory Optional IUCN Red List Category filter
-	 * @param bufferKm Buffer around every geometry part in km; null uses gbif_buffer_km
+	 * @param pointBufferKm Buffer around points in km; null uses gbif_point_buffer_km
+	 * @param bufferKm Buffer around lines and polygons in km; null uses gbif_buffer_km
 	 * @return Response containing occurrence locations and record totals
 	 */
 	OccurrenceLocationResponse getOccurrenceLocations(String geoJson, Integer limit, String speciesGroup,
-			String iucnCategory, Double bufferKm);
+			String iucnCategory, Double pointBufferKm, Double bufferKm);
 }

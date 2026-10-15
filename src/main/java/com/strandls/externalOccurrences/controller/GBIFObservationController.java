@@ -26,15 +26,18 @@ import io.swagger.annotations.ApiResponses;
 
 /**
  * GBIF occurrence queries for a geometry. The request body is any GeoJSON
- * (FeatureCollection, Feature, GeometryCollection or a single geometry). Every
- * geometry part is grown by bufferKm and the search area is their union.
+ * (FeatureCollection, Feature, GeometryCollection or a single geometry). Points
+ * are grown by pointBufferKm, lines and polygons by bufferKm, and the search
+ * area is their union.
  */
 @Api("GBIF Observations")
 @Path(ApiConstants.V1 + ApiConstants.GBIF)
 public class GBIFObservationController {
 
-	private static final String BUFFER_KM_DESCRIPTION = "Buffer in km around every geometry part: a circle around points, "
-			+ "a corridor around lines, the same shape grown outward for polygons. 0 matches polygons exactly. "
+	private static final String POINT_BUFFER_KM_DESCRIPTION = "Buffer in km around points (a circle around each). "
+			+ "0 matches only records at the exact coordinates. Defaults to gbif_point_buffer_km, max gbif_max_buffer_km";
+	private static final String BUFFER_KM_DESCRIPTION = "Buffer in km around lines and polygons: a corridor around lines, "
+			+ "the same shape grown outward for polygons. 0 matches polygons exactly. "
 			+ "Defaults to gbif_buffer_km, max gbif_max_buffer_km";
 
 	@Inject
@@ -48,11 +51,12 @@ public class GBIFObservationController {
 	@ApiResponses(value = { @ApiResponse(code = 404, message = "Could not get the data", response = String.class) })
 	public Response getGBIFObservations(@QueryParam("offset") Integer offset, @QueryParam("limit") Integer limit,
 			@QueryParam("speciesGroup") String speciesGroup, @QueryParam("iucnCategory") String iucnCategory,
+			@ApiParam(value = POINT_BUFFER_KM_DESCRIPTION) @QueryParam("pointBufferKm") Double pointBufferKm,
 			@ApiParam(value = BUFFER_KM_DESCRIPTION) @QueryParam("bufferKm") Double bufferKm, @ApiParam(name = "geoJson") String geoJson)
 			throws ExternalOccurrencesException {
 		try {
 			GBIFObservationResponse response = gbifObservationService.getObservations(geoJson, offset, limit,
-					speciesGroup, iucnCategory, bufferKm);
+					speciesGroup, iucnCategory, pointBufferKm, bufferKm);
 			return Response.status(Status.OK).entity(response).build();
 		} catch (Exception e) {
 			throw new ExternalOccurrencesException(e);
@@ -65,11 +69,12 @@ public class GBIFObservationController {
 	@Produces(MediaType.APPLICATION_JSON)
 	@ApiOperation(value = "Get species group aggregation for a geometry", notes = "Returns aggregated counts by species group based on the geometry", response = SpeciesGroupAggregationResponse.class)
 	@ApiResponses(value = { @ApiResponse(code = 404, message = "Could not get the data", response = String.class) })
-	public Response getSpeciesGroupAggregation(@ApiParam(value = BUFFER_KM_DESCRIPTION) @QueryParam("bufferKm") Double bufferKm,
+	public Response getSpeciesGroupAggregation(@ApiParam(value = POINT_BUFFER_KM_DESCRIPTION) @QueryParam("pointBufferKm") Double pointBufferKm,
+			@ApiParam(value = BUFFER_KM_DESCRIPTION) @QueryParam("bufferKm") Double bufferKm,
 			@ApiParam(name = "geoJson") String geoJson) throws ExternalOccurrencesException {
 		try {
 			SpeciesGroupAggregationResponse response = gbifObservationService.getSpeciesGroupAggregation(geoJson,
-					bufferKm);
+					pointBufferKm, bufferKm);
 			return Response.status(Status.OK).entity(response).build();
 		} catch (Exception e) {
 			throw new ExternalOccurrencesException(e);
@@ -82,10 +87,11 @@ public class GBIFObservationController {
 	@Produces(MediaType.APPLICATION_JSON)
 	@ApiOperation(value = "Get IUCN Red List Category aggregation for a geometry", notes = "Returns aggregated counts by IUCN Red List Category based on the geometry", response = IUCNAggregationResponse.class)
 	@ApiResponses(value = { @ApiResponse(code = 404, message = "Could not get the data", response = String.class) })
-	public Response getIUCNAggregation(@ApiParam(value = BUFFER_KM_DESCRIPTION) @QueryParam("bufferKm") Double bufferKm,
+	public Response getIUCNAggregation(@ApiParam(value = POINT_BUFFER_KM_DESCRIPTION) @QueryParam("pointBufferKm") Double pointBufferKm,
+			@ApiParam(value = BUFFER_KM_DESCRIPTION) @QueryParam("bufferKm") Double bufferKm,
 			@ApiParam(name = "geoJson") String geoJson) throws ExternalOccurrencesException {
 		try {
-			IUCNAggregationResponse response = gbifObservationService.getIUCNAggregation(geoJson, bufferKm);
+			IUCNAggregationResponse response = gbifObservationService.getIUCNAggregation(geoJson, pointBufferKm, bufferKm);
 			return Response.status(Status.OK).entity(response).build();
 		} catch (Exception e) {
 			throw new ExternalOccurrencesException(e);
@@ -100,11 +106,12 @@ public class GBIFObservationController {
 	@ApiResponses(value = { @ApiResponse(code = 404, message = "Could not get the data", response = String.class) })
 	public Response getOccurrenceLocations(@QueryParam("limit") Integer limit,
 			@QueryParam("speciesGroup") String speciesGroup, @QueryParam("iucnCategory") String iucnCategory,
+			@ApiParam(value = POINT_BUFFER_KM_DESCRIPTION) @QueryParam("pointBufferKm") Double pointBufferKm,
 			@ApiParam(value = BUFFER_KM_DESCRIPTION) @QueryParam("bufferKm") Double bufferKm, @ApiParam(name = "geoJson") String geoJson)
 			throws ExternalOccurrencesException {
 		try {
 			OccurrenceLocationResponse response = gbifObservationService.getOccurrenceLocations(geoJson, limit,
-					speciesGroup, iucnCategory, bufferKm);
+					speciesGroup, iucnCategory, pointBufferKm, bufferKm);
 			return Response.status(Status.OK).entity(response).build();
 		} catch (Exception e) {
 			throw new ExternalOccurrencesException(e);

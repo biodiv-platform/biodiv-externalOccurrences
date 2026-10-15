@@ -94,32 +94,44 @@ public class DuckDBUtil {
 	}
 
 	/**
-	 * search_area(geojson, buffer_m): the GeoJSON geometry grown by buffer_m
-	 * metres, as a one-row table with the area a, its bounding box x0, x1, y0, y1,
+	 * search_area(geojson, point_buffer_m, buffer_m): the GeoJSON geometry grown
+	 * outward, as a one-row table with the area a, its bounding box x0, x1, y0, y1,
 	 * and polygons: the input's own polygons without the buffer (empty when it has
-	 * none). Points become circles, lines corridors, and polygons grow outward
-	 * keeping their shape with rounded corners, so the edge of the area is
-	 * buffer_m from the geometry everywhere; overlapping parts merge. ST_Buffer is planar, so the geometry is buffered in an azimuthal
-	 * equidistant projection centred on it, where units are metres, and
-	 * transformed back to lon/lat. A zero buffer uses the geometry as-is so
+	 * none). Points grow by point_buffer_m into circles; lines (corridors) and
+	 * polygons (the same shape with rounded corners) grow by buffer_m, so the edge
+	 * of the area is that far from the geometry everywhere; overlapping parts
+	 * merge. ST_Buffer is planar, so each part is buffered in an azimuthal
+	 * equidistant projection centred on the whole input, where units are metres,
+	 * and transformed back to lon/lat. A zero buffer uses that part as-is so
 	 * polygons stay exact.
 	 */
-	private static final String SEARCH_AREA_MACRO = "CREATE OR REPLACE MACRO search_area(geojson, buffer_m) AS TABLE"
+	private static final String SEARCH_AREA_MACRO = "CREATE OR REPLACE MACRO search_area(geojson, point_buffer_m, buffer_m) AS TABLE"
 			+ " WITH input AS (SELECT ST_MakeValid(ST_GeomFromGeoJSON(geojson)) AS g),"
-			+ " local AS ("
-			+ "   SELECT g, printf('+proj=aeqd +lat_0=%f +lon_0=%f +datum=WGS84 +units=m',"
-			+ "     ST_Y(ST_Centroid(g)), ST_X(ST_Centroid(g))) AS crs"
+			+ " parts AS ("
+			+ "   SELECT g, ST_CollectionExtract(g, 1) AS points,"
+			+ "     ST_Collect([ST_CollectionExtract(g, 2), ST_CollectionExtract(g, 3)]) AS others,"
+			+ "     printf('+proj=aeqd +lat_0=%f +lon_0=%f +datum=WGS84 +units=m',"
+			+ "       ST_Y(ST_Centroid(g)), ST_X(ST_Centroid(g))) AS crs"
 			+ "   FROM input"
 			+ " ),"
 			+ " buffered AS ("
-			+ "   SELECT CASE WHEN buffer_m = 0 THEN g"
-			+ "     ELSE ST_Transform("
-			+ "       ST_Buffer(ST_Transform(g, 'EPSG:4326', crs, always_xy := true), buffer_m, 16),"
-			+ "       crs, 'EPSG:4326', always_xy := true)"
-			+ "   END AS a, ST_CollectionExtract(g, 3) AS polygons"
-			+ "   FROM local"
+			+ "   SELECT g,"
+			+ "     CASE WHEN ST_IsEmpty(points) OR point_buffer_m = 0 THEN points"
+			+ "       ELSE ST_Transform(ST_Buffer(ST_Transform(points, 'EPSG:4326', crs, always_xy := true), point_buffer_m, 16),"
+			+ "         crs, 'EPSG:4326', always_xy := true)"
+			+ "     END AS p,"
+			+ "     CASE WHEN ST_IsEmpty(others) OR buffer_m = 0 THEN others"
+			+ "       ELSE ST_Transform(ST_Buffer(ST_Transform(others, 'EPSG:4326', crs, always_xy := true), buffer_m, 16),"
+			+ "         crs, 'EPSG:4326', always_xy := true)"
+			+ "     END AS o"
+			+ "   FROM parts"
+			+ " ),"
+			+ " area AS ("
+			+ "   SELECT CASE WHEN ST_IsEmpty(p) THEN o WHEN ST_IsEmpty(o) THEN p ELSE ST_Union(p, o) END AS a,"
+			+ "     ST_CollectionExtract(g, 3) AS polygons"
+			+ "   FROM buffered"
 			+ " )"
-			+ " SELECT a, ST_XMin(a) AS x0, ST_XMax(a) AS x1, ST_YMin(a) AS y0, ST_YMax(a) AS y1, polygons FROM buffered";
+			+ " SELECT a, ST_XMin(a) AS x0, ST_XMax(a) AS x1, ST_YMin(a) AS y0, ST_YMax(a) AS y1, polygons FROM area";
 
 	/**
 	 * Initialize the DuckDB database with required extensions and settings.
