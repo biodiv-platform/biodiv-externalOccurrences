@@ -14,7 +14,7 @@ public class OccurrenceLocationResponse {
 	private Double pointBufferKm;
 	/** Buffer in km the search area was built with around lines and polygons */
 	private Double bufferKm;
-	/** Records in the bounding box */
+	/** Records inside the search area; kept for compatibility, always equal to insideRecords */
 	private Long totalRecords;
 	/** Records inside the search area */
 	private Long insideRecords;

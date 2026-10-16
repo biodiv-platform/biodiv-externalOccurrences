@@ -28,7 +28,7 @@ All endpoints take both buffers, each from 0 to `gbif_max_buffer_km`:
 | `/observations` | `offset` (0), `limit` (10), `speciesGroup`, `iucnCategory`, `pointBufferKm`, `bufferKm` | Species in the area with record counts, paginated |
 | `/species-group-aggregation` | `pointBufferKm`, `bufferKm` | Records and species per species group, `Others` last |
 | `/iucn-aggregation` | `pointBufferKm`, `bufferKm` | Records and species per IUCN category, including categories with zero |
-| `/occurrence-locations` | `limit` (5000, max 10000), `speciesGroup`, `iucnCategory`, `pointBufferKm`, `bufferKm` | Locations in the search area's bounding box, flagged `insideGeometry` (inside the search area) and `insidePolygon` (inside the input's own polygons). Also returns the exact `searchArea` as GeoJSON, the `pointBufferKm` and `bufferKm` used, and record totals `insideRecords` and `polygonRecords`, so a map can draw exactly what was counted |
+| `/occurrence-locations` | `limit` (5000, max 10000), `speciesGroup`, `iucnCategory`, `pointBufferKm`, `bufferKm` | Locations inside the search area, flagged `insidePolygon` (inside the input's own polygons). `insideGeometry` is always `true` and `totalRecords` always equals `insideRecords`; both are kept for compatibility. Also returns the exact `searchArea` as GeoJSON, the `pointBufferKm` and `bufferKm` used, and record totals `insideRecords` and `polygonRecords`, so a map can draw exactly what was counted |
 
 Invalid GeoJSON, coordinates out of range or a buffer out of range return `400`.
 

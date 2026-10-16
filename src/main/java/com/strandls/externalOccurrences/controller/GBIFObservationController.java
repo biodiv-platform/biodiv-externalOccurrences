@@ -102,7 +102,7 @@ public class GBIFObservationController {
 	@Path(ApiConstants.OCCURRENCE_LOCATIONS)
 	@Consumes(MediaType.APPLICATION_JSON)
 	@Produces(MediaType.APPLICATION_JSON)
-	@ApiOperation(value = "Get GBIF occurrence locations for a geometry", notes = "Returns GBIF occurrences in the bounding box of the search area grouped by location, flagging those inside the search area", response = OccurrenceLocationResponse.class)
+	@ApiOperation(value = "Get GBIF occurrence locations for a geometry", notes = "Returns GBIF occurrences inside the search area grouped by location, flagging those inside the input's own polygons", response = OccurrenceLocationResponse.class)
 	@ApiResponses(value = { @ApiResponse(code = 404, message = "Could not get the data", response = String.class) })
 	public Response getOccurrenceLocations(@QueryParam("limit") Integer limit,
 			@QueryParam("speciesGroup") String speciesGroup, @QueryParam("iucnCategory") String iucnCategory,

@@ -108,42 +108,38 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 	}
 
 	/**
-	 * Returns every occurrence location in the search area's bounding box,
-	 * grouped on coordinates rounded to 4 decimals (~11m). A location is inside
-	 * the search area (or the input's own polygons) when any of its raw records
-	 * is, so insideRecords counts exactly the records the other endpoints count,
-	 * and polygonRecords the ones inside the polygons themselves. Locations inside
-	 * the polygons, then the search area, are ordered first so they survive the
-	 * LIMIT. The area is LEFT JOINed so it is returned even when there are no
-	 * occurrences. %%FILTERS%% (%FILTERS%
-	 * after String.format) is replaced with the optional species group / IUCN
-	 * filters.
+	 * Returns the occurrence locations inside the search area, grouped on
+	 * coordinates rounded to 4 decimals (~11m). Only records inside the area are
+	 * counted, so insideRecords matches the other endpoints, and polygonRecords
+	 * counts the ones inside the input's own polygons. Locations inside the
+	 * polygons are ordered first so they survive the LIMIT. The area is LEFT
+	 * JOINed so it is returned even when there are no occurrences. %%FILTERS%%
+	 * (%FILTERS% after String.format) is replaced with the optional species
+	 * group / IUCN filters.
 	 */
 	private static String buildOccurrenceLocationQueryTemplate() {
 		return "WITH area AS (" + "    SELECT * FROM search_area(?, ?, ?)" + "), "
 			+ "grouped AS ("
 			+ "    SELECT ROUND(o.decimalLatitude, 4) AS lat, ROUND(o.decimalLongitude, 4) AS lon,"
 			+ "        COUNT(*) AS recordCount, COUNT(DISTINCT o.scientificName) AS speciesCount,"
-			+ "        COUNT(*) FILTER (WHERE" + IN_AREA + ") AS insideCount,"
 			+ "        COUNT(*) FILTER (WHERE ST_Intersects(area.polygons, ST_Point(o.decimalLongitude, o.decimalLatitude))) AS polygonCount"
 			+ "    FROM '%s' o, area"
-			+ "    WHERE" + IN_EXTENT
+			+ "    WHERE" + IN_AREA
 			+ "      AND o.scientificName IS NOT NULL"
 			+ "      %%FILTERS%%"
 			+ "    GROUP BY 1, 2" + "), "
 			+ "limited AS ("
-			+ "    SELECT *, insideCount > 0 AS insideGeometry, polygonCount > 0 AS insidePolygon,"
+			+ "    SELECT *, polygonCount > 0 AS insidePolygon,"
 			+ "        COUNT(*) OVER () AS totalLocations,"
-			+ "        SUM(recordCount) OVER ()::BIGINT AS totalRecords,"
-			+ "        SUM(insideCount) OVER ()::BIGINT AS insideRecords,"
+			+ "        SUM(recordCount) OVER ()::BIGINT AS insideRecords,"
 			+ "        SUM(polygonCount) OVER ()::BIGINT AS polygonRecords"
 			+ "    FROM grouped"
-			+ "    ORDER BY insidePolygon DESC, insideGeometry DESC, recordCount DESC"
+			+ "    ORDER BY insidePolygon DESC, recordCount DESC"
 			+ "    LIMIT ?" + ") "
 			+ "SELECT area.x0 AS min_lon, area.y0 AS min_lat, area.x1 AS max_lon, area.y1 AS max_lat,"
 			+ "    ST_AsGeoJSON(area.a) AS search_area, limited.*"
 			+ " FROM area LEFT JOIN limited ON true"
-			+ " ORDER BY limited.insidePolygon DESC, limited.insideGeometry DESC, limited.recordCount DESC";
+			+ " ORDER BY limited.insidePolygon DESC, limited.recordCount DESC";
 	}
 
 	/**
@@ -508,12 +504,13 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 								continue;
 							}
 							response.setTotalLocations(rs.getLong("totalLocations"));
-							response.setTotalRecords(rs.getLong("totalRecords"));
+							// Every returned location is inside the search area
+							response.setTotalRecords(rs.getLong("insideRecords"));
 							response.setInsideRecords(rs.getLong("insideRecords"));
 							response.setPolygonRecords(rs.getLong("polygonRecords"));
 							response.getLocations().add(new OccurrenceLocation(rs.getDouble("lat"), rs.getDouble("lon"),
 									rs.getLong("recordCount"), rs.getLong("speciesCount"),
-									rs.getBoolean("insideGeometry"), rs.getBoolean("insidePolygon")));
+									true, rs.getBoolean("insidePolygon")));
 						}
 					}
 

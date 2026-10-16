@@ -43,11 +43,11 @@ public interface GBIFObservationService {
 	IUCNAggregationResponse getIUCNAggregation(String geoJson, Double pointBufferKm, Double bufferKm);
 
 	/**
-	 * Query GBIF occurrences in the bounding box of the search area, grouped by
-	 * location, flagging whether each location falls inside the search area
+	 * Query GBIF occurrences inside the search area, grouped by location,
+	 * flagging whether each location falls inside the input's own polygons
 	 *
 	 * @param geoJson Any GeoJSON (FeatureCollection, Feature, GeometryCollection or geometry)
-	 * @param limit Max number of locations to return; locations inside the geometry come first
+	 * @param limit Max number of locations to return; locations inside the polygons come first
 	 * @param speciesGroup Optional species group filter
 	 * @param iucnCategory Optional IUCN Red List Category filter
 	 * @param pointBufferKm Buffer around points in km; null uses gbif_point_buffer_km

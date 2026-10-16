@@ -9,7 +9,7 @@ public class OccurrenceLocation {
 	private Double longitude;
 	private Long recordCount;
 	private Long speciesCount;
-	/** Any record here is inside the search area (the input grown by the buffer) */
+	/** Always true: only locations inside the search area are returned; kept for compatibility */
 	private Boolean insideGeometry;
 	/** Any record here is inside the input's own polygons, without the buffer */
 	private Boolean insidePolygon;
