@@ -94,53 +94,44 @@ public class DuckDBUtil {
 	}
 
 	/**
-	 * Macros that build the search area from any GeoJSON geometry, created in this
-	 * order (each uses the ones before it):
-	 * <ul>
-	 * <li>search_input(geojson): the parsed, valid geometry.</li>
-	 * <li>search_grow(part, whole, buffer_m): part grown outward by buffer_m
-	 * metres; unchanged when the buffer is 0 or part is empty. ST_Buffer is
-	 * planar, so it buffers in an azimuthal equidistant projection centred on the
-	 * whole input, where units are metres, and transforms back to lon/lat.</li>
-	 * <li>search_geom(geojson, point_buffer_m, buffer_m): the search area. Points
-	 * grow by point_buffer_m into circles; lines (corridors) and polygons (the same
-	 * shape with rounded corners) grow by buffer_m, so the edge of the area is
-	 * that far from the geometry everywhere; overlapping parts merge. A zero buffer
-	 * keeps that part as-is so polygons stay exact.</li>
-	 * <li>search_polygons(geojson): the input's own polygons without a buffer
-	 * (empty when it has none).</li>
-	 * <li>search_area(geojson, point_buffer_m, buffer_m): a one-row table with the
-	 * area a, its bounding box x0, x1, y0, y1, and polygons.</li>
-	 * </ul>
-	 * Macros are expanded inline, so list_transform([value], lambda v: ...)[1]
-	 * names a value that is used more than once; otherwise the input would be
-	 * parsed and buffered again for every use. search_geom and search_polygons are
-	 * scalar so that, given literal arguments, DuckDB folds them into constant
-	 * geometries while planning.
+	 * search_area(geojson, point_buffer_m, buffer_m): the GeoJSON geometry grown
+	 * outward, as a one-row table with the area a, its bounding box x0, x1, y0, y1,
+	 * and polygons: the input's own polygons without the buffer (empty when it has
+	 * none). Points grow by point_buffer_m into circles; lines (corridors) and
+	 * polygons (the same shape with rounded corners) grow by buffer_m, so the edge
+	 * of the area is that far from the geometry everywhere; overlapping parts
+	 * merge. ST_Buffer is planar, so each part is buffered in an azimuthal
+	 * equidistant projection centred on the whole input, where units are metres,
+	 * and transformed back to lon/lat. A zero buffer uses that part as-is so
+	 * polygons stay exact.
 	 */
-	private static final String[] SEARCH_MACROS = {
-			"CREATE OR REPLACE MACRO search_input(geojson) AS ST_MakeValid(ST_GeomFromGeoJSON(geojson))",
-			"CREATE OR REPLACE MACRO search_grow(part, whole, buffer_m) AS"
-					+ " list_transform([printf('+proj=aeqd +lat_0=%f +lon_0=%f +datum=WGS84 +units=m',"
-					+ "     ST_Y(ST_Centroid(whole)), ST_X(ST_Centroid(whole)))], lambda crs:"
-					+ "   CASE WHEN ST_IsEmpty(part) OR buffer_m = 0 THEN part"
-					+ "     ELSE ST_Transform(ST_Buffer(ST_Transform(part, 'EPSG:4326', crs, always_xy := true), buffer_m, 16),"
-					+ "       crs, 'EPSG:4326', always_xy := true)"
-					+ "   END)[1]",
-			"CREATE OR REPLACE MACRO search_geom(geojson, point_buffer_m, buffer_m) AS"
-					+ " list_transform([search_input(geojson)], lambda g:"
-					+ "   list_transform([{'points': search_grow(ST_CollectionExtract(g, 1), g, point_buffer_m),"
-					+ "       'others': search_grow(ST_Collect([ST_CollectionExtract(g, 2), ST_CollectionExtract(g, 3)]), g, buffer_m)}],"
-					+ "     lambda grown:"
-					+ "       CASE WHEN ST_IsEmpty(grown.points) THEN grown.others"
-					+ "         WHEN ST_IsEmpty(grown.others) THEN grown.points"
-					+ "         ELSE ST_Union(grown.points, grown.others)"
-					+ "       END)[1])[1]",
-			"CREATE OR REPLACE MACRO search_polygons(geojson) AS ST_CollectionExtract(search_input(geojson), 3)",
-			"CREATE OR REPLACE MACRO search_area(geojson, point_buffer_m, buffer_m) AS TABLE"
-					+ " SELECT a, ST_XMin(a) AS x0, ST_XMax(a) AS x1, ST_YMin(a) AS y0, ST_YMax(a) AS y1,"
-					+ "   search_polygons(geojson) AS polygons"
-					+ " FROM (SELECT search_geom(geojson, point_buffer_m, buffer_m) AS a)" };
+	private static final String SEARCH_AREA_MACRO = "CREATE OR REPLACE MACRO search_area(geojson, point_buffer_m, buffer_m) AS TABLE"
+			+ " WITH input AS (SELECT ST_MakeValid(ST_GeomFromGeoJSON(geojson)) AS g),"
+			+ " parts AS ("
+			+ "   SELECT g, ST_CollectionExtract(g, 1) AS points,"
+			+ "     ST_Collect([ST_CollectionExtract(g, 2), ST_CollectionExtract(g, 3)]) AS others,"
+			+ "     printf('+proj=aeqd +lat_0=%f +lon_0=%f +datum=WGS84 +units=m',"
+			+ "       ST_Y(ST_Centroid(g)), ST_X(ST_Centroid(g))) AS crs"
+			+ "   FROM input"
+			+ " ),"
+			+ " buffered AS ("
+			+ "   SELECT g,"
+			+ "     CASE WHEN ST_IsEmpty(points) OR point_buffer_m = 0 THEN points"
+			+ "       ELSE ST_Transform(ST_Buffer(ST_Transform(points, 'EPSG:4326', crs, always_xy := true), point_buffer_m, 16),"
+			+ "         crs, 'EPSG:4326', always_xy := true)"
+			+ "     END AS p,"
+			+ "     CASE WHEN ST_IsEmpty(others) OR buffer_m = 0 THEN others"
+			+ "       ELSE ST_Transform(ST_Buffer(ST_Transform(others, 'EPSG:4326', crs, always_xy := true), buffer_m, 16),"
+			+ "         crs, 'EPSG:4326', always_xy := true)"
+			+ "     END AS o"
+			+ "   FROM parts"
+			+ " ),"
+			+ " area AS ("
+			+ "   SELECT CASE WHEN ST_IsEmpty(p) THEN o WHEN ST_IsEmpty(o) THEN p ELSE ST_Union(p, o) END AS a,"
+			+ "     ST_CollectionExtract(g, 3) AS polygons"
+			+ "   FROM buffered"
+			+ " )"
+			+ " SELECT a, ST_XMin(a) AS x0, ST_XMax(a) AS x1, ST_YMin(a) AS y0, ST_YMax(a) AS y1, polygons FROM area";
 
 	/**
 	 * Initialize the DuckDB database with required extensions and settings.
@@ -167,10 +158,8 @@ public class DuckDBUtil {
 				stmt.execute("LOAD spatial"); // Load for this initialization connection
 
 				// Search area used by the GBIF queries; persists in the database file
-				logger.info("Creating search area macros...");
-				for (String macro : SEARCH_MACROS) {
-					stmt.execute(macro);
-				}
+				logger.info("Creating search_area macro...");
+				stmt.execute(SEARCH_AREA_MACRO);
 
 				logger.info("DuckDB database initialized successfully with spatial extension");
 			}
