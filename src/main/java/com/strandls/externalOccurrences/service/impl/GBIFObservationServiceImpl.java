@@ -32,12 +32,14 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 
 	private final Logger logger = LoggerFactory.getLogger(GBIFObservationServiceImpl.class);
 	private static final ObjectMapper MAPPER = new ObjectMapper();
+	private static final double DEFAULT_POINT_BUFFER_KM;
 	private static final double DEFAULT_BUFFER_KM;
 	private static final double MAX_BUFFER_KM;
 	private static final int DEFAULT_LOCATION_LIMIT = 5000;
 	private static final int MAX_LOCATION_LIMIT = 10000;
 
 	static {
+		DEFAULT_POINT_BUFFER_KM = readDouble("gbif_point_buffer_km", 10);
 		DEFAULT_BUFFER_KM = readDouble("gbif_buffer_km", 1);
 		MAX_BUFFER_KM = readDouble("gbif_max_buffer_km", 100);
 	}
@@ -48,9 +50,11 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 	}
 
 	/**
-	 * Every query reads the search area from the search_area(geojson, buffer_m)
-	 * macro (see {@link DuckDBUtil}): parameter 1 is a GeometryCollection (see
-	 * {@link GeoJsonUtil#toGeometryCollection}), parameter 2 the buffer in metres.
+	 * Every query reads the search area from the
+	 * search_area(geojson, point_buffer_m, buffer_m) macro (see {@link DuckDBUtil}):
+	 * parameter 1 is a GeometryCollection (see
+	 * {@link GeoJsonUtil#toGeometryCollection}), parameter 2 the buffer around
+	 * points in metres, parameter 3 the buffer around lines and polygons.
 	 * An occurrence is in the area when it is inside the area's bounding box and
 	 * ST_Intersects(area.a, point) is true. The bounding box test is cheap and
 	 * keeps the exact test off most rows (about 4x faster than ST_Intersects alone).
@@ -62,14 +66,14 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 
 	private static String buildCountQueryTemplate() {
 		return "SELECT COUNT(DISTINCT o.scientificName) as totalSpecies, COUNT(*) as totalRecords"
-			+ " FROM '%s' o, search_area(?, ?) area"
+			+ " FROM '%s' o, search_area(?, ?, ?) area"
 			+ " WHERE" + IN_AREA
 			+ "  AND o.scientificName IS NOT NULL";
 	}
 
 	private static String buildAggregationQueryTemplate() {
 		return "SELECT o.scientificName, COUNT(*) as count, FIRST(o.iucnRedListCategory) as iucnRedListCategory, FIRST(o.species_group) as speciesGroup, FIRST(o.taxonKey) as taxonKey, FIRST(o.iucn_link) as iucnLink"
-			+ " FROM '%s' o, search_area(?, ?) area"
+			+ " FROM '%s' o, search_area(?, ?, ?) area"
 			+ " WHERE" + IN_AREA
 			+ "  AND o.scientificName IS NOT NULL" + " %%FILTERS%%"
 			+ " GROUP BY o.scientificName" + " ORDER BY count DESC"
@@ -78,7 +82,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 
 	private static String buildSpeciesGroupAggregationQueryTemplate() {
 		return "SELECT o.species_group, COUNT(*) as totalCount, COUNT(DISTINCT o.scientificName) as uniqueSpeciesCount"
-			+ " FROM '%s' o, search_area(?, ?) area"
+			+ " FROM '%s' o, search_area(?, ?, ?) area"
 			+ " WHERE" + IN_AREA
 			+ "  AND o.species_group IS NOT NULL" + " GROUP BY o.species_group"
 			+ " ORDER BY CASE WHEN o.species_group = 'Others' THEN 1 ELSE 0 END, totalCount DESC";
@@ -90,7 +94,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 			+ "), "
 			+ "observed_counts AS ("
 			+ "    SELECT o.iucnRedListCategory, COUNT(*) as totalCount, COUNT(DISTINCT o.scientificName) as uniqueSpeciesCount"
-			+ "    FROM '%s' o, search_area(?, ?) area"
+			+ "    FROM '%s' o, search_area(?, ?, ?) area"
 			+ "    WHERE" + IN_AREA
 			+ "      AND o.iucnRedListCategory IS NOT NULL"
 			+ "    GROUP BY o.iucnRedListCategory"
@@ -104,54 +108,74 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 	}
 
 	/**
-	 * Returns every occurrence location in the search area's bounding box,
-	 * grouped on coordinates rounded to 4 decimals (~11m). A location is inside
-	 * the search area (or the input's own polygons) when any of its raw records
-	 * is, so insideRecords counts exactly the records the other endpoints count,
-	 * and polygonRecords the ones inside the polygons themselves. Locations inside
-	 * the polygons, then the search area, are ordered first so they survive the
-	 * LIMIT. The area is LEFT JOINed so it is returned even when there are no
-	 * occurrences. %%FILTERS%% (%FILTERS%
-	 * after String.format) is replaced with the optional species group / IUCN
-	 * filters.
+	 * Returns the occurrence locations inside the search area, grouped on
+	 * coordinates rounded to 4 decimals (~11m). Only records inside the area are
+	 * counted, so insideRecords matches the other endpoints, and polygonRecords
+	 * counts the ones inside the input's own polygons. Locations inside the
+	 * polygons are ordered first so they survive the LIMIT. The area is LEFT
+	 * JOINed so it is returned even when there are no occurrences. %%FILTERS%%
+	 * (%FILTERS% after String.format) is replaced with the optional species
+	 * group / IUCN filters.
 	 */
 	private static String buildOccurrenceLocationQueryTemplate() {
-		return "WITH area AS (" + "    SELECT * FROM search_area(?, ?)" + "), "
+		return "WITH area AS (" + "    SELECT * FROM search_area(?, ?, ?)" + "), "
 			+ "grouped AS ("
 			+ "    SELECT ROUND(o.decimalLatitude, 4) AS lat, ROUND(o.decimalLongitude, 4) AS lon,"
 			+ "        COUNT(*) AS recordCount, COUNT(DISTINCT o.scientificName) AS speciesCount,"
-			+ "        COUNT(*) FILTER (WHERE" + IN_AREA + ") AS insideCount,"
 			+ "        COUNT(*) FILTER (WHERE ST_Intersects(area.polygons, ST_Point(o.decimalLongitude, o.decimalLatitude))) AS polygonCount"
 			+ "    FROM '%s' o, area"
-			+ "    WHERE" + IN_EXTENT
+			+ "    WHERE" + IN_AREA
 			+ "      AND o.scientificName IS NOT NULL"
 			+ "      %%FILTERS%%"
 			+ "    GROUP BY 1, 2" + "), "
 			+ "limited AS ("
-			+ "    SELECT *, insideCount > 0 AS insideGeometry, polygonCount > 0 AS insidePolygon,"
+			+ "    SELECT *, polygonCount > 0 AS insidePolygon,"
 			+ "        COUNT(*) OVER () AS totalLocations,"
-			+ "        SUM(recordCount) OVER ()::BIGINT AS totalRecords,"
-			+ "        SUM(insideCount) OVER ()::BIGINT AS insideRecords,"
+			+ "        SUM(recordCount) OVER ()::BIGINT AS insideRecords,"
 			+ "        SUM(polygonCount) OVER ()::BIGINT AS polygonRecords"
 			+ "    FROM grouped"
-			+ "    ORDER BY insidePolygon DESC, insideGeometry DESC, recordCount DESC"
+			+ "    ORDER BY insidePolygon DESC, recordCount DESC"
 			+ "    LIMIT ?" + ") "
 			+ "SELECT area.x0 AS min_lon, area.y0 AS min_lat, area.x1 AS max_lon, area.y1 AS max_lat,"
 			+ "    ST_AsGeoJSON(area.a) AS search_area, limited.*"
 			+ " FROM area LEFT JOIN limited ON true"
-			+ " ORDER BY limited.insidePolygon DESC, limited.insideGeometry DESC, limited.recordCount DESC";
+			+ " ORDER BY limited.insidePolygon DESC, limited.recordCount DESC";
 	}
 
 	/**
-	 * @return the buffer in metres; the configured default when bufferKm is null
-	 * @throws IllegalArgumentException if bufferKm is outside 0..gbif_max_buffer_km
+	 * Buffers the search area is built with: points (and multipoints) grow by
+	 * pointMeters, lines and polygons by meters.
 	 */
-	private static double toBufferMeters(Double bufferKm) {
-		double km = bufferKm == null ? DEFAULT_BUFFER_KM : bufferKm;
-		if (Double.isNaN(km) || km < 0 || km > MAX_BUFFER_KM) {
-			throw new IllegalArgumentException("bufferKm must be between 0 and " + MAX_BUFFER_KM);
+	private static final class SearchBuffers {
+		private final double pointMeters;
+		private final double meters;
+
+		private SearchBuffers(double pointMeters, double meters) {
+			this.pointMeters = pointMeters;
+			this.meters = meters;
 		}
-		return km * 1000;
+
+		/**
+		 * @return the buffers in metres; the configured defaults where a value is null
+		 * @throws IllegalArgumentException if a buffer is outside 0..gbif_max_buffer_km
+		 */
+		private static SearchBuffers of(Double pointBufferKm, Double bufferKm) {
+			return new SearchBuffers(toMeters("pointBufferKm", pointBufferKm, DEFAULT_POINT_BUFFER_KM),
+					toMeters("bufferKm", bufferKm, DEFAULT_BUFFER_KM));
+		}
+
+		private static double toMeters(String name, Double valueKm, double defaultKm) {
+			double km = valueKm == null ? defaultKm : valueKm;
+			if (Double.isNaN(km) || km < 0 || km > MAX_BUFFER_KM) {
+				throw new IllegalArgumentException(name + " must be between 0 and " + MAX_BUFFER_KM);
+			}
+			return km * 1000;
+		}
+
+		@Override
+		public String toString() {
+			return "points " + pointMeters + "m, other geometries " + meters + "m";
+		}
 	}
 
 	private static String filterClause(String speciesGroup, String iucnCategory) {
@@ -166,11 +190,12 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 	}
 
 	/** Binds the area parameters and optional filters; returns the next parameter index. */
-	private static int bindAreaAndFilters(PreparedStatement stmt, String geometries, double bufferMeters,
+	private static int bindAreaAndFilters(PreparedStatement stmt, String geometries, SearchBuffers buffers,
 			String speciesGroup, String iucnCategory) throws SQLException {
 		int paramIndex = 1;
 		stmt.setString(paramIndex++, geometries);
-		stmt.setDouble(paramIndex++, bufferMeters);
+		stmt.setDouble(paramIndex++, buffers.pointMeters);
+		stmt.setDouble(paramIndex++, buffers.meters);
 		if (speciesGroup != null && !speciesGroup.isEmpty()) {
 			stmt.setString(paramIndex++, speciesGroup);
 		}
@@ -182,7 +207,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 
 	@Override
 	public GBIFObservationResponse getObservations(String geoJson, Integer offset, Integer limit, String speciesGroup,
-			String iucnCategory, Double bufferKm) {
+			String iucnCategory, Double pointBufferKm, Double bufferKm) {
 		// Set default values
 		if (offset == null || offset < 0) {
 			offset = 0;
@@ -193,7 +218,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 
 		// Invalid input is thrown as IllegalArgumentException (400)
 		String geometries = GeoJsonUtil.toGeometryCollection(geoJson);
-		double bufferMeters = toBufferMeters(bufferKm);
+		SearchBuffers buffers = SearchBuffers.of(pointBufferKm, bufferKm);
 
 		try {
 			logger.debug("Received GeoJSON: {}", geoJson);
@@ -206,13 +231,13 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 			}
 
 			// Execute queries
-			CountResult countResult = executeCountQuery(geometries, bufferMeters, parquetPath, speciesGroup, iucnCategory);
-			List<SpeciesAggregation> aggregations = executeAggregationQuery(geometries, bufferMeters, parquetPath, limit,
+			CountResult countResult = executeCountQuery(geometries, buffers, parquetPath, speciesGroup, iucnCategory);
+			List<SpeciesAggregation> aggregations = executeAggregationQuery(geometries, buffers, parquetPath, limit,
 					offset, speciesGroup, iucnCategory);
 
-			logger.info("Found {} species aggregations (total species: {}, total occurrence records: {}) with speciesGroup filter: {}, iucnCategory filter: {}, buffer: {}m",
+			logger.info("Found {} species aggregations (total species: {}, total occurrence records: {}) with speciesGroup filter: {}, iucnCategory filter: {}, buffers: {}",
 					aggregations.size(), countResult.totalSpecies, countResult.totalRecords, speciesGroup, iucnCategory,
-					bufferMeters);
+					buffers);
 
 			return new GBIFObservationResponse(countResult.totalSpecies, countResult.totalRecords, offset, limit, aggregations);
 
@@ -232,7 +257,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		}
 	}
 
-	private CountResult executeCountQuery(String geometries, double bufferMeters, String parquetPath,
+	private CountResult executeCountQuery(String geometries, SearchBuffers buffers, String parquetPath,
 			String speciesGroup, String iucnCategory) {
 		try {
 			return DuckDBUtil.withConnection(conn -> {
@@ -245,7 +270,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 				logger.debug("Executing DuckDB count query with speciesGroup: {}, iucnCategory: {}", speciesGroup, iucnCategory);
 
 				try (PreparedStatement stmt = conn.prepareStatement(query)) {
-					bindAreaAndFilters(stmt, geometries, bufferMeters, speciesGroup, iucnCategory);
+					bindAreaAndFilters(stmt, geometries, buffers, speciesGroup, iucnCategory);
 
 					// Execute query
 					try (ResultSet rs = stmt.executeQuery()) {
@@ -263,7 +288,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		}
 	}
 
-	private List<SpeciesAggregation> executeAggregationQuery(String geometries, double bufferMeters,
+	private List<SpeciesAggregation> executeAggregationQuery(String geometries, SearchBuffers buffers,
 			String parquetPath, Integer limit, Integer offset, String speciesGroup, String iucnCategory) {
 		try {
 			return DuckDBUtil.withConnection(conn -> {
@@ -278,7 +303,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 
 				try (PreparedStatement stmt = conn.prepareStatement(query)) {
 					// Set parameters
-					int paramIndex = bindAreaAndFilters(stmt, geometries, bufferMeters, speciesGroup, iucnCategory);
+					int paramIndex = bindAreaAndFilters(stmt, geometries, buffers, speciesGroup, iucnCategory);
 					stmt.setInt(paramIndex++, limit);
 					stmt.setInt(paramIndex++, offset);
 
@@ -306,10 +331,10 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 	}
 
 	@Override
-	public SpeciesGroupAggregationResponse getSpeciesGroupAggregation(String geoJson, Double bufferKm) {
+	public SpeciesGroupAggregationResponse getSpeciesGroupAggregation(String geoJson, Double pointBufferKm, Double bufferKm) {
 		// Invalid input is thrown as IllegalArgumentException (400)
 		String geometries = GeoJsonUtil.toGeometryCollection(geoJson);
-		double bufferMeters = toBufferMeters(bufferKm);
+		SearchBuffers buffers = SearchBuffers.of(pointBufferKm, bufferKm);
 
 		try {
 			logger.debug("Received GeoJSON for species group aggregation: {}", geoJson);
@@ -322,7 +347,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 			}
 
 			// Execute species group aggregation query
-			List<SpeciesGroupAggregation> aggregations = executeSpeciesGroupAggregationQuery(geometries, bufferMeters,
+			List<SpeciesGroupAggregation> aggregations = executeSpeciesGroupAggregationQuery(geometries, buffers,
 					parquetPath);
 
 			logger.info("Found {} species group aggregations", aggregations.size());
@@ -335,7 +360,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		}
 	}
 
-	private List<SpeciesGroupAggregation> executeSpeciesGroupAggregationQuery(String geometries, double bufferMeters,
+	private List<SpeciesGroupAggregation> executeSpeciesGroupAggregationQuery(String geometries, SearchBuffers buffers,
 			String parquetPath) {
 		try {
 			return DuckDBUtil.withConnection(conn -> {
@@ -347,7 +372,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 				logger.debug("Executing DuckDB species group aggregation query with parquet path: {}", parquetPath);
 
 				try (PreparedStatement stmt = conn.prepareStatement(query)) {
-					bindAreaAndFilters(stmt, geometries, bufferMeters, null, null);
+					bindAreaAndFilters(stmt, geometries, buffers, null, null);
 
 					// Execute query
 					try (ResultSet rs = stmt.executeQuery()) {
@@ -370,10 +395,10 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 	}
 
 	@Override
-	public IUCNAggregationResponse getIUCNAggregation(String geoJson, Double bufferKm) {
+	public IUCNAggregationResponse getIUCNAggregation(String geoJson, Double pointBufferKm, Double bufferKm) {
 		// Invalid input is thrown as IllegalArgumentException (400)
 		String geometries = GeoJsonUtil.toGeometryCollection(geoJson);
-		double bufferMeters = toBufferMeters(bufferKm);
+		SearchBuffers buffers = SearchBuffers.of(pointBufferKm, bufferKm);
 
 		try {
 			logger.debug("Received GeoJSON for IUCN aggregation: {}", geoJson);
@@ -386,7 +411,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 			}
 
 			// Execute IUCN aggregation query
-			List<IUCNAggregation> aggregations = executeIUCNAggregationQuery(geometries, bufferMeters, parquetPath);
+			List<IUCNAggregation> aggregations = executeIUCNAggregationQuery(geometries, buffers, parquetPath);
 
 			logger.info("Found {} IUCN category aggregations", aggregations.size());
 
@@ -398,7 +423,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		}
 	}
 
-	private List<IUCNAggregation> executeIUCNAggregationQuery(String geometries, double bufferMeters,
+	private List<IUCNAggregation> executeIUCNAggregationQuery(String geometries, SearchBuffers buffers,
 			String parquetPath) {
 		try {
 			return DuckDBUtil.withConnection(conn -> {
@@ -410,7 +435,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 				logger.debug("Executing DuckDB IUCN aggregation query with parquet path: {}", parquetPath);
 
 				try (PreparedStatement stmt = conn.prepareStatement(query)) {
-					bindAreaAndFilters(stmt, geometries, bufferMeters, null, null);
+					bindAreaAndFilters(stmt, geometries, buffers, null, null);
 
 					// Execute query
 					try (ResultSet rs = stmt.executeQuery()) {
@@ -434,7 +459,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 
 	@Override
 	public OccurrenceLocationResponse getOccurrenceLocations(String geoJson, Integer limit, String speciesGroup,
-			String iucnCategory, Double bufferKm) {
+			String iucnCategory, Double pointBufferKm, Double bufferKm) {
 		if (limit == null || limit <= 0) {
 			limit = DEFAULT_LOCATION_LIMIT;
 		}
@@ -442,9 +467,9 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 
 		// Invalid input is thrown as IllegalArgumentException (400)
 		String geometries = GeoJsonUtil.toGeometryCollection(geoJson);
-		double bufferMeters = toBufferMeters(bufferKm);
+		SearchBuffers buffers = SearchBuffers.of(pointBufferKm, bufferKm);
 
-		OccurrenceLocationResponse empty = emptyOccurrenceLocationResponse(bufferMeters);
+		OccurrenceLocationResponse empty = emptyOccurrenceLocationResponse(buffers);
 
 		String parquetPath = ExternalOccurrencesConfig.getProperty("gbif_parquet_path");
 		if (parquetPath == null || parquetPath.isEmpty()) {
@@ -462,10 +487,10 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 						locationLimit, speciesGroup, iucnCategory);
 
 				try (PreparedStatement stmt = conn.prepareStatement(query)) {
-					int paramIndex = bindAreaAndFilters(stmt, geometries, bufferMeters, speciesGroup, iucnCategory);
+					int paramIndex = bindAreaAndFilters(stmt, geometries, buffers, speciesGroup, iucnCategory);
 					stmt.setInt(paramIndex++, locationLimit);
 
-					OccurrenceLocationResponse response = emptyOccurrenceLocationResponse(bufferMeters);
+					OccurrenceLocationResponse response = emptyOccurrenceLocationResponse(buffers);
 
 					try (ResultSet rs = stmt.executeQuery()) {
 						while (rs.next()) {
@@ -479,12 +504,13 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 								continue;
 							}
 							response.setTotalLocations(rs.getLong("totalLocations"));
-							response.setTotalRecords(rs.getLong("totalRecords"));
+							// Every returned location is inside the search area
+							response.setTotalRecords(rs.getLong("insideRecords"));
 							response.setInsideRecords(rs.getLong("insideRecords"));
 							response.setPolygonRecords(rs.getLong("polygonRecords"));
 							response.getLocations().add(new OccurrenceLocation(rs.getDouble("lat"), rs.getDouble("lon"),
 									rs.getLong("recordCount"), rs.getLong("speciesCount"),
-									rs.getBoolean("insideGeometry"), rs.getBoolean("insidePolygon")));
+									true, rs.getBoolean("insidePolygon")));
 						}
 					}
 
@@ -503,11 +529,12 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		}
 	}
 
-	private static OccurrenceLocationResponse emptyOccurrenceLocationResponse(double bufferMeters) {
+	private static OccurrenceLocationResponse emptyOccurrenceLocationResponse(SearchBuffers buffers) {
 		OccurrenceLocationResponse response = new OccurrenceLocationResponse(null, 0L, 0L, 0L, false,
 				new ArrayList<>());
 		response.setPolygonRecords(0L);
-		response.setBufferKm(bufferMeters / 1000);
+		response.setPointBufferKm(buffers.pointMeters / 1000);
+		response.setBufferKm(buffers.meters / 1000);
 		return response;
 	}
 
