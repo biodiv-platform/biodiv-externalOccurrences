@@ -7,6 +7,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +39,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 	private static final double MAX_BUFFER_KM;
 	private static final int DEFAULT_LOCATION_LIMIT = 5000;
 	private static final int MAX_LOCATION_LIMIT = 10000;
+	private static final Pattern SEARCH_AREA_PLACEHOLDER = Pattern.compile("%(AREA|GEOJSON)%");
 
 	static {
 		DEFAULT_POINT_BUFFER_KM = readDouble("gbif_point_buffer_km", 10);
@@ -113,18 +116,28 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 	 * counted, so insideRecords matches the other endpoints, and polygonRecords
 	 * counts the ones inside the input's own polygons. Locations inside the
 	 * polygons are ordered first so they survive the LIMIT. The area is LEFT
-	 * JOINed so it is returned even when there are no occurrences. %%FILTERS%%
-	 * (%FILTERS% after String.format) is replaced with the optional species
-	 * group / IUCN filters.
+	 * JOINed so it is returned even when there are no occurrences.
+	 *
+	 * Unlike the other queries, the area is not a bound parameter: %%AREA%% and
+	 * %%GEOJSON%% (%AREA% and %GEOJSON% after String.format) are replaced with the
+	 * GeoJSON and buffers as literals (see {@link #withSearchArea}). DuckDB then
+	 * folds search_geom and search_polygons into constant geometries while
+	 * planning and tests each record against them prepared once; read from the
+	 * area row, they are rebuilt for every record, which makes dense areas several
+	 * times slower. A CCA without polygons skips the polygon test entirely, as
+	 * ST_IsEmpty also folds. %%FILTERS%% (%FILTERS% after String.format) is
+	 * replaced with the optional species group / IUCN filters.
 	 */
 	private static String buildOccurrenceLocationQueryTemplate() {
-		return "WITH area AS (" + "    SELECT * FROM search_area(?, ?, ?)" + "), "
+		return "WITH area AS (" + "    SELECT * FROM search_area(%%AREA%%)" + "), "
 			+ "grouped AS ("
 			+ "    SELECT ROUND(o.decimalLatitude, 4) AS lat, ROUND(o.decimalLongitude, 4) AS lon,"
 			+ "        COUNT(*) AS recordCount, COUNT(DISTINCT o.scientificName) AS speciesCount,"
-			+ "        COUNT(*) FILTER (WHERE ST_Intersects(area.polygons, ST_Point(o.decimalLongitude, o.decimalLatitude))) AS polygonCount"
+			+ "        COUNT(*) FILTER (WHERE NOT ST_IsEmpty(search_polygons(%%GEOJSON%%))"
+			+ "            AND ST_Intersects(search_polygons(%%GEOJSON%%), ST_Point(o.decimalLongitude, o.decimalLatitude))) AS polygonCount"
 			+ "    FROM '%s' o, area"
-			+ "    WHERE" + IN_AREA
+			+ "    WHERE" + IN_EXTENT
+			+ "      AND ST_Intersects(search_geom(%%AREA%%), ST_Point(o.decimalLongitude, o.decimalLatitude))"
 			+ "      AND o.scientificName IS NOT NULL"
 			+ "      %%FILTERS%%"
 			+ "    GROUP BY 1, 2" + "), "
@@ -178,6 +191,26 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		}
 	}
 
+	/**
+	 * Replaces %AREA% with the search area arguments (geojson, point_buffer_m,
+	 * buffer_m) and %GEOJSON% with the GeoJSON, as SQL literals. The GeoJSON is the
+	 * one GeoJsonUtil built and is quoted by DuckDBUtil.literal; the buffers are
+	 * validated numbers. Both are replaced in one pass, so text inside the GeoJSON
+	 * that looks like a placeholder is never replaced.
+	 */
+	private static String withSearchArea(String query, String geometries, SearchBuffers buffers) {
+		String geoJson = DuckDBUtil.literal(geometries);
+		String areaArgs = geoJson + ", " + buffers.pointMeters + ", " + buffers.meters;
+		Matcher placeholder = SEARCH_AREA_PLACEHOLDER.matcher(query);
+		StringBuffer filled = new StringBuffer();
+		while (placeholder.find()) {
+			String value = "AREA".equals(placeholder.group(1)) ? areaArgs : geoJson;
+			placeholder.appendReplacement(filled, Matcher.quoteReplacement(value));
+		}
+		placeholder.appendTail(filled);
+		return filled.toString();
+	}
+
 	private static String filterClause(String speciesGroup, String iucnCategory) {
 		String filterClause = "";
 		if (speciesGroup != null && !speciesGroup.isEmpty()) {
@@ -196,6 +229,12 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		stmt.setString(paramIndex++, geometries);
 		stmt.setDouble(paramIndex++, buffers.pointMeters);
 		stmt.setDouble(paramIndex++, buffers.meters);
+		return bindFilters(stmt, paramIndex, speciesGroup, iucnCategory);
+	}
+
+	/** Binds the optional filters from paramIndex; returns the next parameter index. */
+	private static int bindFilters(PreparedStatement stmt, int paramIndex, String speciesGroup, String iucnCategory)
+			throws SQLException {
 		if (speciesGroup != null && !speciesGroup.isEmpty()) {
 			stmt.setString(paramIndex++, speciesGroup);
 		}
@@ -480,14 +519,14 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		final int locationLimit = limit;
 		try {
 			return DuckDBUtil.withConnection(conn -> {
-				String query = String.format(buildOccurrenceLocationQueryTemplate(), parquetPath)
-						.replace("%FILTERS%", filterClause(speciesGroup, iucnCategory));
+				String query = withSearchArea(String.format(buildOccurrenceLocationQueryTemplate(), parquetPath)
+						.replace("%FILTERS%", filterClause(speciesGroup, iucnCategory)), geometries, buffers);
 
 				logger.debug("Executing DuckDB occurrence location query with limit: {}, speciesGroup: {}, iucnCategory: {}",
 						locationLimit, speciesGroup, iucnCategory);
 
 				try (PreparedStatement stmt = conn.prepareStatement(query)) {
-					int paramIndex = bindAreaAndFilters(stmt, geometries, buffers, speciesGroup, iucnCategory);
+					int paramIndex = bindFilters(stmt, 1, speciesGroup, iucnCategory);
 					stmt.setInt(paramIndex++, locationLimit);
 
 					OccurrenceLocationResponse response = emptyOccurrenceLocationResponse(buffers);
