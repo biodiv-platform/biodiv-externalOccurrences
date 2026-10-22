@@ -6,10 +6,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 /**
- * Normalises any GeoJSON object into a flat JSON array of geometries, which the
- * DuckDB queries read with {@code unnest(from_json(?, '["JSON"]'))}.
+ * Normalises any GeoJSON object into a single GeometryCollection, which DuckDB's
+ * ST_GeomFromGeoJSON can read (it does not accept Features).
  */
 public class GeoJsonUtil {
 
@@ -23,13 +24,13 @@ public class GeoJsonUtil {
 
 	/**
 	 * Accepts a FeatureCollection, Feature, GeometryCollection or any single
-	 * geometry and returns its geometries as a JSON array string.
+	 * geometry and returns its geometries as a flat GeometryCollection string.
 	 *
 	 * @throws IllegalArgumentException if the input is not valid GeoJSON, has no
 	 *                                  geometry, or has coordinates outside WGS84
 	 *                                  bounds
 	 */
-	public static String toGeometryArray(String geoJson) {
+	public static String toGeometryCollection(String geoJson) {
 		if (geoJson == null || geoJson.isBlank()) {
 			throw new IllegalArgumentException("GeoJSON body is required");
 		}
@@ -46,7 +47,10 @@ public class GeoJsonUtil {
 		if (geometries.isEmpty()) {
 			throw new IllegalArgumentException("GeoJSON contains no geometry");
 		}
-		return geometries.toString();
+		ObjectNode collection = MAPPER.createObjectNode();
+		collection.put("type", "GeometryCollection");
+		collection.set("geometries", geometries);
+		return collection.toString();
 	}
 
 	private static void collect(JsonNode node, ArrayNode out) {

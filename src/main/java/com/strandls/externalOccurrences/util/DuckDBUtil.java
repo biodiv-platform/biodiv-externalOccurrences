@@ -94,6 +94,46 @@ public class DuckDBUtil {
 	}
 
 	/**
+	 * search_area(geojson, point_buffer_m, buffer_m): the GeoJSON geometry grown
+	 * outward, as a one-row table with the area a, its bounding box x0, x1, y0, y1,
+	 * and polygons: the input's own polygons without the buffer (empty when it has
+	 * none). Points grow by point_buffer_m into circles; lines (corridors) and
+	 * polygons (the same shape with rounded corners) grow by buffer_m, so the edge
+	 * of the area is that far from the geometry everywhere; overlapping parts
+	 * merge. ST_Buffer is planar, so each part is buffered in an azimuthal
+	 * equidistant projection centred on the whole input, where units are metres,
+	 * and transformed back to lon/lat. A zero buffer uses that part as-is so
+	 * polygons stay exact.
+	 */
+	private static final String SEARCH_AREA_MACRO = "CREATE OR REPLACE MACRO search_area(geojson, point_buffer_m, buffer_m) AS TABLE"
+			+ " WITH input AS (SELECT ST_MakeValid(ST_GeomFromGeoJSON(geojson)) AS g),"
+			+ " parts AS ("
+			+ "   SELECT g, ST_CollectionExtract(g, 1) AS points,"
+			+ "     ST_Collect([ST_CollectionExtract(g, 2), ST_CollectionExtract(g, 3)]) AS others,"
+			+ "     printf('+proj=aeqd +lat_0=%f +lon_0=%f +datum=WGS84 +units=m',"
+			+ "       ST_Y(ST_Centroid(g)), ST_X(ST_Centroid(g))) AS crs"
+			+ "   FROM input"
+			+ " ),"
+			+ " buffered AS ("
+			+ "   SELECT g,"
+			+ "     CASE WHEN ST_IsEmpty(points) OR point_buffer_m = 0 THEN points"
+			+ "       ELSE ST_Transform(ST_Buffer(ST_Transform(points, 'EPSG:4326', crs, always_xy := true), point_buffer_m, 16),"
+			+ "         crs, 'EPSG:4326', always_xy := true)"
+			+ "     END AS p,"
+			+ "     CASE WHEN ST_IsEmpty(others) OR buffer_m = 0 THEN others"
+			+ "       ELSE ST_Transform(ST_Buffer(ST_Transform(others, 'EPSG:4326', crs, always_xy := true), buffer_m, 16),"
+			+ "         crs, 'EPSG:4326', always_xy := true)"
+			+ "     END AS o"
+			+ "   FROM parts"
+			+ " ),"
+			+ " area AS ("
+			+ "   SELECT CASE WHEN ST_IsEmpty(p) THEN o WHEN ST_IsEmpty(o) THEN p ELSE ST_Union(p, o) END AS a,"
+			+ "     ST_CollectionExtract(g, 3) AS polygons"
+			+ "   FROM buffered"
+			+ " )"
+			+ " SELECT a, ST_XMin(a) AS x0, ST_XMax(a) AS x1, ST_YMin(a) AS y0, ST_YMax(a) AS y1, polygons FROM area";
+
+	/**
 	 * Initialize the DuckDB database with required extensions and settings.
 	 */
 	private void initializeDatabase(String dbPath, String memoryLimit, String tempDir) throws SQLException {
@@ -116,6 +156,10 @@ public class DuckDBUtil {
 				logger.info("Installing spatial extension...");
 				stmt.execute("INSTALL spatial");
 				stmt.execute("LOAD spatial"); // Load for this initialization connection
+
+				// Search area used by the GBIF queries; persists in the database file
+				logger.info("Creating search_area macro...");
+				stmt.execute(SEARCH_AREA_MACRO);
 
 				logger.info("DuckDB database initialized successfully with spatial extension");
 			}
