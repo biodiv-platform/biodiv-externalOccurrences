@@ -38,6 +38,11 @@ public class GeoJsonUtil {
 		JsonNode root;
 		try {
 			root = MAPPER.readTree(geoJson);
+			// The generated (jersey3) client sends a String body as a JSON string
+			// literal, so unwrap it once to get the GeoJSON object
+			if (root != null && root.isTextual()) {
+				root = MAPPER.readTree(root.asText());
+			}
 		} catch (JsonProcessingException e) {
 			throw new IllegalArgumentException("Invalid GeoJSON: " + e.getOriginalMessage());
 		}
