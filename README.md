@@ -25,7 +25,7 @@ All endpoints take both buffers, each from 0 to `gbif_max_buffer_km`:
 
 | Path | Query params | Response |
 |---|---|---|
-| `/observations` | `offset` (0), `limit` (10), `speciesGroup`, `iucnCategory`, `pointBufferKm`, `bufferKm` | Species in the area with record counts, paginated |
+| `/observations` | `offset` (0), `limit` (10), `speciesGroup`, `iucnCategory`, `pointBufferKm`, `bufferKm` | Species in the area with record counts, paginated. Each species also has `taxonId` (IBP taxon matched to the GBIF name) and `speciesId` (its IBP species page); both are null when there is no match |
 | `/species-group-aggregation` | `pointBufferKm`, `bufferKm` | Records and species per species group, `Others` last |
 | `/iucn-aggregation` | `pointBufferKm`, `bufferKm` | Records and species per IUCN category, including categories with zero |
 | `/occurrence-locations` | `limit` (5000, max 10000), `speciesGroup`, `iucnCategory`, `pointBufferKm`, `bufferKm` | Locations inside the search area, flagged `insidePolygon` (inside the input's own polygons). `insideGeometry` is always `true` and `totalRecords` always equals `insideRecords`; both are kept for compatibility. Also returns the exact `searchArea` as GeoJSON, the `pointBufferKm` and `bufferKm` used, and record totals `insideRecords` and `polygonRecords`, so a map can draw exactly what was counted |
