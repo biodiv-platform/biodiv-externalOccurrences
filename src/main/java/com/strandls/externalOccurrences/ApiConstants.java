@@ -11,4 +11,6 @@ public class ApiConstants {
 	public static final String SPECIES_GROUP_AGGREGATION = "/species-group-aggregation";
 	public static final String IUCN_AGGREGATION = "/iucn-aggregation";
 	public static final String OCCURRENCE_LOCATIONS = "/occurrence-locations";
+	public static final String TAXON = "/taxon";
+	public static final String GRID = "/grid";
 }

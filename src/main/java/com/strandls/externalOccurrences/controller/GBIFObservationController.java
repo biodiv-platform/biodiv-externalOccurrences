@@ -1,5 +1,7 @@
 package com.strandls.externalOccurrences.controller;
 
+import java.util.Map;
+
 import com.strandls.externalOccurrences.ApiConstants;
 import com.strandls.externalOccurrences.exception.ExternalOccurrencesException;
 import com.strandls.externalOccurrences.pojo.response.GBIFObservationResponse;
@@ -16,8 +18,10 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
@@ -121,6 +125,27 @@ public class GBIFObservationController {
 		try {
 			OccurrenceLocationResponse response = gbifObservationService.getOccurrenceLocations(geoJson, limit,
 					speciesGroup, iucnCategory, pointBufferKm, bufferKm);
+			return Response.status(Status.OK).entity(response).build();
+		} catch (Exception e) {
+			throw new ExternalOccurrencesException(e);
+		}
+	}
+
+	@GET
+	@Path(ApiConstants.TAXON + "/{taxonId}" + ApiConstants.GRID)
+	@Produces(MediaType.APPLICATION_JSON)
+	@Operation(summary = "Get GBIF occurrence grid for an IBP taxon", description = "Returns record counts per geohash cell inside the bounding box for occurrences matched to the IBP taxon", responses = {
+			@ApiResponse(responseCode = "200", description = "Success", content = @Content(schema = @Schema(implementation = Map.class))),
+			@ApiResponse(responseCode = "400", description = "Precision out of range", content = @Content(schema = @Schema(implementation = String.class))),
+			@ApiResponse(responseCode = "500", description = "Could not get the data", content = @Content(schema = @Schema(implementation = String.class))) })
+	public Response getTaxonGrid(@Parameter(description = "IBP taxon id") @PathParam("taxonId") Long taxonId,
+			@QueryParam("top") Double top, @QueryParam("left") Double left, @QueryParam("bottom") Double bottom,
+			@QueryParam("right") Double right,
+			@Parameter(description = "Geohash length, 1 to 8") @QueryParam("precision") Integer precision)
+			throws ExternalOccurrencesException {
+		try {
+			Map<String, Long> response = gbifObservationService.getTaxonGrid(taxonId, top, left, bottom, right,
+					precision);
 			return Response.status(Status.OK).entity(response).build();
 		} catch (Exception e) {
 			throw new ExternalOccurrencesException(e);

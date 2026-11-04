@@ -41,6 +41,21 @@ Content-Type: application/json
 {"type":"Point","coordinates":[94.9022,26.4633]}
 ```
 
+### Taxon grid
+
+`GET /v1/gbif/taxon/{taxonId}/grid` takes no body. It returns `{geohash: count}`: the number of GBIF records matched to the IBP taxon `taxonId` (`ibp_taxon_id`) in each geohash cell inside a bounding box. This is the shape the naksha grid layer expects, and the IBP species page Occurrence map uses it.
+
+| Query param | |
+|---|---|
+| `top`, `left`, `bottom`, `right` | Bounding box in degrees; values past ±90/±180 are clamped, missing ones mean the whole world |
+| `precision` | Geohash length, 1 to 8; anything else returns `400` |
+
+```
+GET /externalOccurrences-api/api/v1/gbif/taxon/164696/grid?top=38&left=65&bottom=5&right=100&precision=4
+```
+
+Geohashes come from `st_geohash` in the [pintail](https://duckdb.org/community_extensions/extensions/pintail) community extension. pintail needs DuckDB 1.5.5 or later.
+
 ## How the search area is built
 
 The service flattens the posted GeoJSON into one GeometryCollection (`GeoJsonUtil`), then every query reads the area from the `search_area(geojson, point_buffer_m, buffer_m)` macro, which `DuckDBUtil` creates at startup. It splits the points from the lines and polygons so each gets its own buffer. `ST_Buffer` works in the geometry's own units, so the macro projects each part into metres (an azimuthal equidistant projection centred on the whole input), buffers it, projects it back to lon/lat, and unions the parts. It returns the area `a`, its bounding box `x0, x1, y0, y1`, and `polygons`, the input's own polygons without a buffer.
@@ -98,6 +113,6 @@ The `BETWEEN` bounding-box test is cheap and keeps the exact `ST_Intersects` tes
 | `gbif_point_buffer_km` | Buffer around points when `pointBufferKm` is not sent (default 10) |
 | `gbif_buffer_km` | Buffer around lines and polygons when `bufferKm` is not sent (default 1) |
 | `gbif_max_buffer_km` | Largest `pointBufferKm` or `bufferKm` accepted (default 100) |
-| `duckdb_database_path` | DuckDB file; holds the installed spatial extension |
+| `duckdb_database_path` | DuckDB file; holds the installed spatial extension. `pintail` is installed from the community repository on first start, so the server needs network access once |
 | `duckdb_memory_limit` | Shared by all queries (default 50MB) |
 | `duckdb_temp_directory` | Where DuckDB spills when over the memory limit |

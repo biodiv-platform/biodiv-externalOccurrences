@@ -83,9 +83,9 @@ public class DuckDBUtil {
 		// Enable auto-commit for read-only queries
 		config.setAutoCommit(true);
 
-		// CRITICAL: Load spatial extension for each connection from the pool
+		// CRITICAL: Load spatial and pintail (geohash) extensions for each connection from the pool
 		// INSTALL persists to the database, but LOAD is per-connection
-		config.setConnectionInitSql("LOAD spatial");
+		config.setConnectionInitSql("LOAD spatial; LOAD pintail");
 
 		this.dataSource = new HikariDataSource(config);
 
@@ -157,11 +157,16 @@ public class DuckDBUtil {
 				stmt.execute("INSTALL spatial");
 				stmt.execute("LOAD spatial"); // Load for this initialization connection
 
+				// Install pintail community extension, used for geohash grids
+				logger.info("Installing pintail extension...");
+				stmt.execute("INSTALL pintail FROM community");
+				stmt.execute("LOAD pintail");
+
 				// Search area used by the GBIF queries; persists in the database file
 				logger.info("Creating search_area macro...");
 				stmt.execute(SEARCH_AREA_MACRO);
 
-				logger.info("DuckDB database initialized successfully with spatial extension");
+				logger.info("DuckDB database initialized successfully with spatial and pintail extensions");
 			}
 		} catch (SQLException e) {
 			logger.error("Failed to initialize DuckDB database", e);

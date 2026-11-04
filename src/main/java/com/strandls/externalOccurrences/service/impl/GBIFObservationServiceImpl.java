@@ -5,6 +5,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -37,6 +38,8 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 	private static final double MAX_BUFFER_KM;
 	private static final int DEFAULT_LOCATION_LIMIT = 5000;
 	private static final int MAX_LOCATION_LIMIT = 10000;
+	private static final int MIN_GRID_PRECISION = 1;
+	private static final int MAX_GRID_PRECISION = 8;
 
 	static {
 		DEFAULT_POINT_BUFFER_KM = readDouble("gbif_point_buffer_km", 10);
@@ -536,6 +539,76 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 			logger.error("Error executing DuckDB occurrence location query", e);
 			return empty;
 		}
+	}
+
+	/**
+	 * Record count per geohash cell (pintail st_geohash) for one IBP taxon inside
+	 * a bounding box
+	 */
+	private static final String TAXON_GRID_QUERY_TEMPLATE = "SELECT st_geohash(o.decimalLatitude, o.decimalLongitude, ?) AS geohash,"
+			+ " COUNT(*) AS count"
+			+ " FROM '%s' o"
+			+ " WHERE o.ibp_taxon_id = ?"
+			+ " AND o.decimalLatitude BETWEEN ? AND ? AND o.decimalLongitude BETWEEN ? AND ?"
+			+ " GROUP BY geohash";
+
+	@Override
+	public Map<String, Long> getTaxonGrid(Long taxonId, Double top, Double left, Double bottom, Double right,
+			Integer precision) {
+		if (taxonId == null) {
+			throw new IllegalArgumentException("taxonId is required");
+		}
+		if (precision == null || precision < MIN_GRID_PRECISION || precision > MAX_GRID_PRECISION) {
+			throw new IllegalArgumentException(
+					"precision must be between " + MIN_GRID_PRECISION + " and " + MAX_GRID_PRECISION);
+		}
+		// Map bounds can go past the poles and wrap past the antimeridian
+		double north = clamp(top, -90, 90, 90);
+		double south = clamp(bottom, -90, 90, -90);
+		double east = clamp(right, -180, 180, 180);
+		double west = clamp(left, -180, 180, -180);
+
+		Map<String, Long> grid = new LinkedHashMap<>();
+
+		String parquetPath = ExternalOccurrencesConfig.getProperty("gbif_parquet_path");
+		if (parquetPath == null || parquetPath.isEmpty()) {
+			logger.error("GBIF parquet file path not configured");
+			return grid;
+		}
+
+		try {
+			return DuckDBUtil.withConnection(conn -> {
+				try (PreparedStatement stmt = conn
+						.prepareStatement(String.format(TAXON_GRID_QUERY_TEMPLATE, parquetPath))) {
+					stmt.setInt(1, precision);
+					stmt.setLong(2, taxonId);
+					stmt.setDouble(3, south);
+					stmt.setDouble(4, north);
+					stmt.setDouble(5, west);
+					stmt.setDouble(6, east);
+
+					try (ResultSet rs = stmt.executeQuery()) {
+						while (rs.next()) {
+							grid.put(rs.getString("geohash"), rs.getLong("count"));
+						}
+					}
+
+					logger.debug("Found {} grid cells for taxon {} at precision {}", grid.size(), taxonId, precision);
+					return grid;
+				}
+			});
+		} catch (Exception e) {
+			logger.error("Error executing DuckDB taxon grid query", e);
+			return new LinkedHashMap<>();
+		}
+	}
+
+	/** @return value limited to min..max, or defaultValue when it is null or NaN */
+	private static double clamp(Double value, double min, double max, double defaultValue) {
+		if (value == null || value.isNaN()) {
+			return defaultValue;
+		}
+		return Math.max(min, Math.min(max, value));
 	}
 
 	private static OccurrenceLocationResponse emptyOccurrenceLocationResponse(SearchBuffers buffers) {

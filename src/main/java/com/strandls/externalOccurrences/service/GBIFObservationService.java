@@ -1,5 +1,7 @@
 package com.strandls.externalOccurrences.service;
 
+import java.util.Map;
+
 import com.strandls.externalOccurrences.pojo.response.GBIFObservationResponse;
 import com.strandls.externalOccurrences.pojo.response.IUCNAggregationResponse;
 import com.strandls.externalOccurrences.pojo.response.OccurrenceLocationResponse;
@@ -56,4 +58,19 @@ public interface GBIFObservationService {
 	 */
 	OccurrenceLocationResponse getOccurrenceLocations(String geoJson, Integer limit, String speciesGroup,
 			String iucnCategory, Double pointBufferKm, Double bufferKm);
+
+	/**
+	 * Count GBIF occurrences matched to an IBP taxon per geohash cell inside a
+	 * bounding box, for a density grid map
+	 *
+	 * @param taxonId IBP taxon id (ibp_taxon_id)
+	 * @param top North edge latitude; null or beyond 90 uses 90
+	 * @param left West edge longitude; null or beyond -180 uses -180
+	 * @param bottom South edge latitude; null or beyond -90 uses -90
+	 * @param right East edge longitude; null or beyond 180 uses 180
+	 * @param precision Geohash length, 1 to 8
+	 * @return Record count per geohash
+	 */
+	Map<String, Long> getTaxonGrid(Long taxonId, Double top, Double left, Double bottom, Double right,
+			Integer precision);
 }
