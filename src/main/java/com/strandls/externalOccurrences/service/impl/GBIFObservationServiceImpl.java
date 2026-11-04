@@ -73,6 +73,7 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 
 	private static String buildAggregationQueryTemplate() {
 		return "SELECT o.scientificName, COUNT(*) as count, FIRST(o.iucnRedListCategory) as iucnRedListCategory, FIRST(o.species_group) as speciesGroup, FIRST(o.taxonKey) as taxonKey, FIRST(o.iucn_link) as iucnLink"
+			+ ", ANY_VALUE(o.ibp_taxon_id) as taxonId, ANY_VALUE(o.ibp_species_id) as speciesId"
 			+ " FROM '%s' o, search_area(?, ?, ?) area"
 			+ " WHERE" + IN_AREA
 			+ "  AND o.scientificName IS NOT NULL" + " %%FILTERS%%"
@@ -205,6 +206,12 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		return paramIndex;
 	}
 
+	/** @return the column as a Long, or null when it is SQL NULL (getLong would give 0) */
+	private static Long getNullableLong(ResultSet rs, String column) throws SQLException {
+		long value = rs.getLong(column);
+		return rs.wasNull() ? null : value;
+	}
+
 	@Override
 	public GBIFObservationResponse getObservations(String geoJson, Integer offset, Integer limit, String speciesGroup,
 			String iucnCategory, Double pointBufferKm, Double bufferKm) {
@@ -317,6 +324,8 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 							agg.setSpeciesGroup(rs.getString("speciesGroup"));
 							agg.setTaxonKey(rs.getString("taxonKey"));
 							agg.setIucnLink(rs.getString("iucnLink"));
+							agg.setTaxonId(getNullableLong(rs, "taxonId"));
+							agg.setSpeciesId(getNullableLong(rs, "speciesId"));
 							aggregations.add(agg);
 						}
 					}
