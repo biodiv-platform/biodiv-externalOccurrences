@@ -7,17 +7,21 @@ public class SpeciesAggregation {
 	private String speciesGroup;
 	private String taxonKey;
 	private String iucnLink;
+	private Long taxonId;
+	private Long speciesId;
 
 	public SpeciesAggregation() {
 	}
 
-	public SpeciesAggregation(String scientificName, Long count, String iucnRedListCategory, String speciesGroup, String taxonKey, String iucnLink) {
+	public SpeciesAggregation(String scientificName, Long count, String iucnRedListCategory, String speciesGroup, String taxonKey, String iucnLink, Long taxonId, Long speciesId) {
 		this.scientificName = scientificName;
 		this.count = count;
 		this.iucnRedListCategory = iucnRedListCategory;
 		this.speciesGroup = speciesGroup;
 		this.taxonKey = taxonKey;
 		this.iucnLink = iucnLink;
+		this.taxonId = taxonId;
+		this.speciesId = speciesId;
 	}
 
 	public String getScientificName() {
@@ -66,5 +70,23 @@ public class SpeciesAggregation {
 
 	public void setIucnLink(String iucnLink) {
 		this.iucnLink = iucnLink;
+	}
+
+	/** @return the IBP taxon matched to the GBIF name, or null */
+	public Long getTaxonId() {
+		return taxonId;
+	}
+
+	public void setTaxonId(Long taxonId) {
+		this.taxonId = taxonId;
+	}
+
+	/** @return the IBP species page of {@link #getTaxonId()}, or null */
+	public Long getSpeciesId() {
+		return speciesId;
+	}
+
+	public void setSpeciesId(Long speciesId) {
+		this.speciesId = speciesId;
 	}
 }
