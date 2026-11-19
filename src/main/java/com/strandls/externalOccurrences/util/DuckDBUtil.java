@@ -16,7 +16,7 @@ import com.zaxxer.hikari.HikariDataSource;
  *
  * This ensures:
  * - Single DuckDB database shared across all requests
- * - Memory limit enforced globally (default 50MB)
+ * - Memory limit and thread count enforced on every pooled connection (default 1GB, 4 threads)
  * - Spatial extension loaded once at initialization
  * - Efficient connection reuse via pooling
  */
@@ -41,6 +41,7 @@ public class DuckDBUtil {
 		// Load configuration
 		String dbPath = ExternalOccurrencesConfig.getProperty("duckdb_database_path");
 		String memoryLimit = ExternalOccurrencesConfig.getProperty("duckdb_memory_limit");
+		String threads = ExternalOccurrencesConfig.getProperty("duckdb_threads");
 		String tempDir = ExternalOccurrencesConfig.getProperty("duckdb_temp_directory");
 
 		// Use defaults if not configured
@@ -49,8 +50,12 @@ public class DuckDBUtil {
 			logger.warn("duckdb_database_path not configured, using default: {}", dbPath);
 		}
 		if (memoryLimit == null || memoryLimit.isEmpty()) {
-			memoryLimit = "50MB";
+			memoryLimit = "1GB";
 			logger.info("duckdb_memory_limit not configured, using default: {}", memoryLimit);
+		}
+		if (threads == null || !threads.matches("\\d+") || Integer.parseInt(threads) < 1) {
+			threads = "4";
+			logger.info("duckdb_threads not configured, using default: {}", threads);
 		}
 		if (tempDir == null || tempDir.isEmpty()) {
 			tempDir = "/tmp/externalOccurrences_duckdb_temp";
@@ -58,6 +63,12 @@ public class DuckDBUtil {
 		}
 
 		this.databasePath = dbPath;
+
+		// DuckDB drops these settings when its last connection closes, so they are applied on every pooled
+		// connection rather than once during initialisation. Without that, DuckDB runs with its defaults:
+		// 80% of the server's RAM and every CPU core, inside the Tomcat process.
+		String settingsSql = "SET memory_limit = " + literal(memoryLimit) + "; SET threads = " + threads
+				+ "; SET temp_directory = " + literal(tempDir);
 
 		// Ensure DuckDB JDBC driver is loaded
 		try {
@@ -68,14 +79,15 @@ public class DuckDBUtil {
 		}
 
 		// Initialize database with spatial extension and memory settings
-		initializeDatabase(dbPath, memoryLimit, tempDir);
+		initializeDatabase(dbPath, settingsSql);
 
 		// Setup connection pool
 		HikariConfig config = new HikariConfig();
 		config.setJdbcUrl("jdbc:duckdb:" + dbPath);
 		config.setMaximumPoolSize(10); // Max 10 concurrent connections
 		config.setMinimumIdle(2);      // Keep 2 connections ready
-		config.setConnectionTimeout(30000); // 30 seconds
+		// Fail fast when the pool is busy: a waiting request holds a shared Tomcat thread
+		config.setConnectionTimeout(3000); // 3 seconds
 		config.setIdleTimeout(600000);      // 10 minutes
 		config.setMaxLifetime(1800000);     // 30 minutes
 		config.setPoolName("DuckDB-ExternalOccurrences-Pool");
@@ -83,14 +95,14 @@ public class DuckDBUtil {
 		// Enable auto-commit for read-only queries
 		config.setAutoCommit(true);
 
-		// CRITICAL: Load spatial and pintail (geohash) extensions for each connection from the pool
-		// INSTALL persists to the database, but LOAD is per-connection
-		config.setConnectionInitSql("LOAD spatial; LOAD pintail");
+		// CRITICAL: Apply the settings and load spatial and pintail (geohash) extensions for each connection
+		// from the pool. INSTALL persists to the database, but SET and LOAD do not
+		config.setConnectionInitSql(settingsSql + "; LOAD spatial; LOAD pintail");
 
 		this.dataSource = new HikariDataSource(config);
 
-		logger.info("DuckDB connection pool initialized successfully. Database: {}, Memory Limit: {}",
-				dbPath, memoryLimit);
+		logger.info("DuckDB connection pool initialized successfully. Database: {}, Memory Limit: {}, Threads: {}",
+				dbPath, memoryLimit, threads);
 	}
 
 	/**
@@ -136,20 +148,16 @@ public class DuckDBUtil {
 	/**
 	 * Initialize the DuckDB database with required extensions and settings.
 	 */
-	private void initializeDatabase(String dbPath, String memoryLimit, String tempDir) throws SQLException {
+	private void initializeDatabase(String dbPath, String settingsSql) throws SQLException {
 		String jdbcUrl = "jdbc:duckdb:" + dbPath;
 
 		logger.info("Initializing DuckDB database at: {}", dbPath);
 
 		try (Connection conn = java.sql.DriverManager.getConnection(jdbcUrl)) {
 			try (Statement stmt = conn.createStatement()) {
-				// Set memory limit (applies to all connections to this database)
-				logger.info("Setting DuckDB memory_limit to: {}", memoryLimit);
-				stmt.execute("SET memory_limit = " + literal(memoryLimit));
-
-				// Set temp directory for disk spilling
-				logger.info("Setting DuckDB temp_directory to: {}", tempDir);
-				stmt.execute("SET temp_directory = " + literal(tempDir));
+				// Memory limit, threads and temp directory for this setup connection; pooled connections
+				// apply the same settings through connectionInitSql
+				stmt.execute(settingsSql);
 
 				// Install spatial extension (persists in the database file)
 				// Note: INSTALL persists, but LOAD is per-connection (handled by HikariCP connectionInitSql)
