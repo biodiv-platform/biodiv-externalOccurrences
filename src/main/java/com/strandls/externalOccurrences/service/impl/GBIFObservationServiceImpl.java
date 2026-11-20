@@ -1,5 +1,7 @@
 package com.strandls.externalOccurrences.service.impl;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -570,8 +572,8 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 
 		Map<String, Long> grid = new LinkedHashMap<>();
 
-		String parquetPath = ExternalOccurrencesConfig.getProperty("gbif_parquet_path");
-		if (parquetPath == null || parquetPath.isEmpty()) {
+		String parquetPath = getTaxonGridParquetPath();
+		if (parquetPath == null) {
 			logger.error("GBIF parquet file path not configured");
 			return grid;
 		}
@@ -601,6 +603,26 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 			logger.error("Error executing DuckDB taxon grid query", e);
 			return new LinkedHashMap<>();
 		}
+	}
+
+	/**
+	 * The taxon-sorted copy (gbif_taxon_grid_parquet_path) when it is configured and
+	 * readable, else the full file (gbif_parquet_path). In the full file every row
+	 * group spans almost every ibp_taxon_id, so each grid query reads all of it; in
+	 * the sorted copy DuckDB reads only the row groups holding that taxon.
+	 *
+	 * @return parquet path, or null when neither is configured
+	 */
+	private String getTaxonGridParquetPath() {
+		String sortedPath = ExternalOccurrencesConfig.getProperty("gbif_taxon_grid_parquet_path");
+		if (sortedPath != null && !sortedPath.isEmpty()) {
+			if (Files.isReadable(Path.of(sortedPath))) {
+				return sortedPath;
+			}
+			logger.warn("gbif_taxon_grid_parquet_path {} is not readable, using gbif_parquet_path", sortedPath);
+		}
+		String parquetPath = ExternalOccurrencesConfig.getProperty("gbif_parquet_path");
+		return parquetPath == null || parquetPath.isEmpty() ? null : parquetPath;
 	}
 
 	/** @return value limited to min..max, or defaultValue when it is null or NaN */
