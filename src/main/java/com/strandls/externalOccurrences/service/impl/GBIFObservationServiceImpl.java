@@ -2,6 +2,7 @@ package com.strandls.externalOccurrences.service.impl;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -10,6 +11,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,11 +22,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import com.strandls.externalOccurrences.ExternalOccurrencesConfig;
 import com.strandls.externalOccurrences.pojo.IUCNAggregation;
+import com.strandls.externalOccurrences.pojo.MonthYearCount;
 import com.strandls.externalOccurrences.pojo.OccurrenceLocation;
 import com.strandls.externalOccurrences.pojo.SpeciesAggregation;
 import com.strandls.externalOccurrences.pojo.SpeciesGroupAggregation;
 import com.strandls.externalOccurrences.pojo.response.GBIFObservationResponse;
 import com.strandls.externalOccurrences.pojo.response.IUCNAggregationResponse;
+import com.strandls.externalOccurrences.pojo.response.MonthYearResponse;
 import com.strandls.externalOccurrences.pojo.response.OccurrenceLocationResponse;
 import com.strandls.externalOccurrences.pojo.response.SpeciesGroupAggregationResponse;
 import com.strandls.externalOccurrences.service.GBIFObservationService;
@@ -545,7 +549,9 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 
 	/**
 	 * Record count per geohash cell (pintail st_geohash) for one IBP taxon inside
-	 * a bounding box
+	 * a bounding box. Reads only ibp_taxon_id, decimalLatitude and
+	 * decimalLongitude: the gbif_taxon_grid_parquet_path copy holds just these, so
+	 * a new column used here must be added to that file too.
 	 */
 	private static final String TAXON_GRID_QUERY_TEMPLATE = "SELECT st_geohash(o.decimalLatitude, o.decimalLongitude, ?) AS geohash,"
 			+ " COUNT(*) AS count"
@@ -602,6 +608,114 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		} catch (Exception e) {
 			logger.error("Error executing DuckDB taxon grid query", e);
 			return new LinkedHashMap<>();
+		}
+	}
+
+	/** Earliest and latest year with a month for one IBP taxon */
+	private static final String TAXON_YEAR_RANGE_QUERY_TEMPLATE = "SELECT MIN(o.year) AS minYear, MAX(o.year) AS maxYear"
+			+ " FROM '%s' o"
+			+ " WHERE o.ibp_taxon_id = ? AND o.month BETWEEN 1 AND 12 AND o.year IS NOT NULL";
+
+	/** Record count per year and month for one IBP taxon inside a range of years */
+	private static final String TAXON_MONTH_YEAR_QUERY_TEMPLATE = "SELECT o.year AS year, o.month AS month, COUNT(*) AS count"
+			+ " FROM '%s' o"
+			+ " WHERE o.ibp_taxon_id = ? AND o.month BETWEEN 1 AND 12 AND o.year BETWEEN ? AND ?"
+			+ " GROUP BY o.year, o.month"
+			+ " ORDER BY o.year, o.month";
+
+	private static final String[] MONTH_YEAR_COLUMNS = { "ibp_taxon_id", "year", "month" };
+
+	/** Whether a parquet file has the columns a query needs, per path, checked once */
+	private static final Map<String, Boolean> PARQUET_HAS_COLUMNS = new ConcurrentHashMap<>();
+
+	@Override
+	public MonthYearResponse getTaxonMonthYear(Long taxonId, Integer minYear, Integer maxYear) {
+		if (taxonId == null) {
+			throw new IllegalArgumentException("taxonId is required");
+		}
+		if (minYear != null && maxYear != null && minYear > maxYear) {
+			throw new IllegalArgumentException("minYear must not be after maxYear");
+		}
+
+		MonthYearResponse response = new MonthYearResponse(null, null, new ArrayList<>());
+
+		try {
+			return DuckDBUtil.withConnection(conn -> {
+				String parquetPath = getTaxonMonthYearParquetPath(conn);
+				if (parquetPath == null) {
+					logger.error("GBIF parquet file path not configured");
+					return response;
+				}
+
+				try (PreparedStatement stmt = conn
+						.prepareStatement(String.format(TAXON_YEAR_RANGE_QUERY_TEMPLATE, parquetPath))) {
+					stmt.setLong(1, taxonId);
+					try (ResultSet rs = stmt.executeQuery()) {
+						if (rs.next() && rs.getObject("minYear") != null) {
+							response.setMinYear(rs.getInt("minYear"));
+							response.setMaxYear(rs.getInt("maxYear"));
+						}
+					}
+				}
+				if (response.getMinYear() == null) {
+					return response;
+				}
+
+				try (PreparedStatement stmt = conn
+						.prepareStatement(String.format(TAXON_MONTH_YEAR_QUERY_TEMPLATE, parquetPath))) {
+					stmt.setLong(1, taxonId);
+					stmt.setInt(2, minYear != null ? minYear : response.getMinYear());
+					stmt.setInt(3, maxYear != null ? maxYear : response.getMaxYear());
+					try (ResultSet rs = stmt.executeQuery()) {
+						while (rs.next()) {
+							response.getCounts().add(
+									new MonthYearCount(rs.getInt("year"), rs.getInt("month"), rs.getLong("count")));
+						}
+					}
+				}
+
+				logger.debug("Found {} year-month counts for taxon {} in {}-{}", response.getCounts().size(), taxonId,
+						minYear, maxYear);
+				return response;
+			});
+		} catch (Exception e) {
+			logger.error("Error executing DuckDB taxon month-year query", e);
+			return new MonthYearResponse(null, null, new ArrayList<>());
+		}
+	}
+
+	/**
+	 * The taxon-sorted copy (gbif_taxon_grid_parquet_path) when it also has year and
+	 * month, else the full file. The sorted copy is much faster per taxon; until it
+	 * is rebuilt with year and month, the full file keeps this endpoint working.
+	 */
+	private String getTaxonMonthYearParquetPath(Connection conn) {
+		String gridPath = getTaxonGridParquetPath();
+		String fullPath = ExternalOccurrencesConfig.getProperty("gbif_parquet_path");
+		if (gridPath == null || gridPath.equals(fullPath)) {
+			return gridPath;
+		}
+		boolean hasColumns = PARQUET_HAS_COLUMNS.computeIfAbsent(gridPath, path -> hasColumns(conn, path, MONTH_YEAR_COLUMNS));
+		return hasColumns ? gridPath : fullPath;
+	}
+
+	/** @return whether the parquet file at path has all the columns */
+	private boolean hasColumns(Connection conn, String path, String... columns) {
+		try (PreparedStatement stmt = conn
+				.prepareStatement(String.format("SELECT column_name FROM (DESCRIBE SELECT * FROM '%s')", path));
+				ResultSet rs = stmt.executeQuery()) {
+			List<String> present = new ArrayList<>();
+			while (rs.next()) {
+				present.add(rs.getString("column_name"));
+			}
+			boolean all = present.containsAll(Arrays.asList(columns));
+			if (!all) {
+				logger.info("{} has no year/month columns, the month-year counts read gbif_parquet_path", path);
+			}
+			return all;
+		} catch (SQLException e) {
+			logger.warn("Could not read the columns of {}", path, e);
+			return false;
 		}
 	}
 

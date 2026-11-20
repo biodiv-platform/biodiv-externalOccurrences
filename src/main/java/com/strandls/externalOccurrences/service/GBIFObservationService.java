@@ -4,6 +4,7 @@ import java.util.Map;
 
 import com.strandls.externalOccurrences.pojo.response.GBIFObservationResponse;
 import com.strandls.externalOccurrences.pojo.response.IUCNAggregationResponse;
+import com.strandls.externalOccurrences.pojo.response.MonthYearResponse;
 import com.strandls.externalOccurrences.pojo.response.OccurrenceLocationResponse;
 import com.strandls.externalOccurrences.pojo.response.SpeciesGroupAggregationResponse;
 
@@ -73,4 +74,15 @@ public interface GBIFObservationService {
 	 */
 	Map<String, Long> getTaxonGrid(Long taxonId, Double top, Double left, Double bottom, Double right,
 			Integer precision);
+
+	/**
+	 * Count GBIF occurrences matched to an IBP taxon per year and month, for a
+	 * temporal distribution chart. Records without a year or month are left out.
+	 *
+	 * @param taxonId IBP taxon id (ibp_taxon_id)
+	 * @param minYear First year to count; null for no lower limit
+	 * @param maxYear Last year to count; null for no upper limit
+	 * @return Counts per year and month, and the taxon's earliest and latest year
+	 */
+	MonthYearResponse getTaxonMonthYear(Long taxonId, Integer minYear, Integer maxYear);
 }

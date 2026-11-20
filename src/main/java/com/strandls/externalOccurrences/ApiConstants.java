@@ -13,4 +13,5 @@ public class ApiConstants {
 	public static final String OCCURRENCE_LOCATIONS = "/occurrence-locations";
 	public static final String TAXON = "/taxon";
 	public static final String GRID = "/grid";
+	public static final String MONTH_YEAR = "/month-year";
 }
