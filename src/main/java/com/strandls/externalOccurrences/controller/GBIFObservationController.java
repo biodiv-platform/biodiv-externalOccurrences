@@ -6,6 +6,7 @@ import com.strandls.externalOccurrences.ApiConstants;
 import com.strandls.externalOccurrences.exception.ExternalOccurrencesException;
 import com.strandls.externalOccurrences.pojo.response.GBIFObservationResponse;
 import com.strandls.externalOccurrences.pojo.response.IUCNAggregationResponse;
+import com.strandls.externalOccurrences.pojo.response.MonthYearResponse;
 import com.strandls.externalOccurrences.pojo.response.OccurrenceLocationResponse;
 import com.strandls.externalOccurrences.pojo.response.SpeciesGroupAggregationResponse;
 import com.strandls.externalOccurrences.service.GBIFObservationService;
@@ -146,6 +147,25 @@ public class GBIFObservationController {
 		try {
 			Map<String, Long> response = gbifObservationService.getTaxonGrid(taxonId, top, left, bottom, right,
 					precision);
+			return Response.status(Status.OK).entity(response).build();
+		} catch (Exception e) {
+			throw new ExternalOccurrencesException(e);
+		}
+	}
+
+	@GET
+	@Path(ApiConstants.TAXON + "/{taxonId}" + ApiConstants.MONTH_YEAR)
+	@Produces(MediaType.APPLICATION_JSON)
+	@Operation(summary = "Get GBIF occurrence counts per year and month for an IBP taxon", description = "Returns record counts per year and month (records with both) for occurrences matched to the IBP taxon, plus the taxon's earliest and latest year", responses = {
+			@ApiResponse(responseCode = "200", description = "Success", content = @Content(schema = @Schema(implementation = MonthYearResponse.class))),
+			@ApiResponse(responseCode = "400", description = "minYear after maxYear", content = @Content(schema = @Schema(implementation = String.class))),
+			@ApiResponse(responseCode = "500", description = "Could not get the data", content = @Content(schema = @Schema(implementation = String.class))) })
+	public Response getTaxonMonthYear(@Parameter(description = "IBP taxon id") @PathParam("taxonId") Long taxonId,
+			@Parameter(description = "First year to count; all years when empty") @QueryParam("minYear") Integer minYear,
+			@Parameter(description = "Last year to count; all years when empty") @QueryParam("maxYear") Integer maxYear)
+			throws ExternalOccurrencesException {
+		try {
+			MonthYearResponse response = gbifObservationService.getTaxonMonthYear(taxonId, minYear, maxYear);
 			return Response.status(Status.OK).entity(response).build();
 		} catch (Exception e) {
 			throw new ExternalOccurrencesException(e);
