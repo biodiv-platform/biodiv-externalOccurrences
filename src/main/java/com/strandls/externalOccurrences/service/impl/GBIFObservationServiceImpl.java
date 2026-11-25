@@ -566,49 +566,146 @@ public class GBIFObservationServiceImpl implements GBIFObservationService {
 		if (taxonId == null) {
 			throw new IllegalArgumentException("taxonId is required");
 		}
-		if (precision == null || precision < MIN_GRID_PRECISION || precision > MAX_GRID_PRECISION) {
-			throw new IllegalArgumentException(
-					"precision must be between " + MIN_GRID_PRECISION + " and " + MAX_GRID_PRECISION);
+		checkGridPrecision(precision);
+
+		String parquetPath = getTaxonGridParquetPath();
+		if (parquetPath == null) {
+			logger.error("GBIF parquet file path not configured");
+			return new LinkedHashMap<>();
 		}
-		// Map bounds can go past the poles and wrap past the antimeridian
+		return queryGrid(String.format(TAXON_GRID_QUERY_TEMPLATE, parquetPath), taxonId, precision, top, left, bottom,
+				right);
+	}
+
+	/** Record count per geohash cell (pintail st_geohash) for all GBIF records inside a bounding box */
+	private static final String GRID_QUERY_TEMPLATE = "SELECT st_geohash(o.decimalLatitude, o.decimalLongitude, ?) AS geohash,"
+			+ " COUNT(*) AS count"
+			+ " FROM '%s' o"
+			+ " WHERE o.decimalLatitude BETWEEN ? AND ? AND o.decimalLongitude BETWEEN ? AND ?"
+			+ " GROUP BY geohash";
+
+	/**
+	 * Up to this precision getGrid filters a grid of the whole file kept in memory
+	 * instead of querying the file. Zoomed-out maps (naksha asks for precision 4
+	 * below zoom 6) cover nearly every record, so each of those queries would
+	 * aggregate the whole file (seconds); at precision 4 the whole file is about
+	 * 6,500 cells. The grids are built on first use and kept until a restart.
+	 */
+	private static final int WHOLE_GRID_MAX_PRECISION = 4;
+	private static final Map<Integer, Map<String, Long>> WHOLE_GRIDS = new ConcurrentHashMap<>();
+
+	@Override
+	public Map<String, Long> getGrid(Double top, Double left, Double bottom, Double right, Integer precision) {
+		checkGridPrecision(precision);
+
+		String parquetPath = ExternalOccurrencesConfig.getProperty("gbif_parquet_path");
+		if (parquetPath == null || parquetPath.isEmpty()) {
+			logger.error("GBIF parquet file path not configured");
+			return new LinkedHashMap<>();
+		}
+		String query = String.format(GRID_QUERY_TEMPLATE, parquetPath);
+
+		if (precision > WHOLE_GRID_MAX_PRECISION) {
+			return queryGrid(query, null, precision, top, left, bottom, right);
+		}
+
+		// a failed query returns an empty grid, which is not kept, so the next request retries
+		Map<String, Long> wholeGrid = WHOLE_GRIDS.computeIfAbsent(precision, p -> {
+			Map<String, Long> grid = queryGrid(query, null, p, null, null, null, null);
+			return grid.isEmpty() ? null : grid;
+		});
+		if (wholeGrid == null) {
+			return new LinkedHashMap<>();
+		}
+
 		double north = clamp(top, -90, 90, 90);
 		double south = clamp(bottom, -90, 90, -90);
 		double east = clamp(right, -180, 180, 180);
 		double west = clamp(left, -180, 180, -180);
 
 		Map<String, Long> grid = new LinkedHashMap<>();
+		wholeGrid.forEach((geohash, count) -> {
+			double[] cell = geohashBounds(geohash);
+			if (cell[0] <= north && cell[1] >= south && cell[2] <= east && cell[3] >= west) {
+				grid.put(geohash, count);
+			}
+		});
+		return grid;
+	}
 
-		String parquetPath = getTaxonGridParquetPath();
-		if (parquetPath == null) {
-			logger.error("GBIF parquet file path not configured");
-			return grid;
+	private static void checkGridPrecision(Integer precision) {
+		if (precision == null || precision < MIN_GRID_PRECISION || precision > MAX_GRID_PRECISION) {
+			throw new IllegalArgumentException(
+					"precision must be between " + MIN_GRID_PRECISION + " and " + MAX_GRID_PRECISION);
 		}
+	}
+
+	/**
+	 * Runs a grid query whose parameters are precision, then taxonId when not null,
+	 * then south, north, west and east
+	 *
+	 * @return record count per geohash, empty when the query fails
+	 */
+	private Map<String, Long> queryGrid(String query, Long taxonId, int precision, Double top, Double left,
+			Double bottom, Double right) {
+		// Map bounds can go past the poles and wrap past the antimeridian
+		double north = clamp(top, -90, 90, 90);
+		double south = clamp(bottom, -90, 90, -90);
+		double east = clamp(right, -180, 180, 180);
+		double west = clamp(left, -180, 180, -180);
 
 		try {
 			return DuckDBUtil.withConnection(conn -> {
-				try (PreparedStatement stmt = conn
-						.prepareStatement(String.format(TAXON_GRID_QUERY_TEMPLATE, parquetPath))) {
-					stmt.setInt(1, precision);
-					stmt.setLong(2, taxonId);
-					stmt.setDouble(3, south);
-					stmt.setDouble(4, north);
-					stmt.setDouble(5, west);
-					stmt.setDouble(6, east);
+				try (PreparedStatement stmt = conn.prepareStatement(query)) {
+					int i = 1;
+					stmt.setInt(i++, precision);
+					if (taxonId != null) {
+						stmt.setLong(i++, taxonId);
+					}
+					stmt.setDouble(i++, south);
+					stmt.setDouble(i++, north);
+					stmt.setDouble(i++, west);
+					stmt.setDouble(i, east);
 
+					Map<String, Long> grid = new LinkedHashMap<>();
 					try (ResultSet rs = stmt.executeQuery()) {
 						while (rs.next()) {
 							grid.put(rs.getString("geohash"), rs.getLong("count"));
 						}
 					}
 
-					logger.debug("Found {} grid cells for taxon {} at precision {}", grid.size(), taxonId, precision);
+					logger.debug("Found {} grid cells for {} at precision {}", grid.size(),
+							taxonId != null ? "taxon " + taxonId : "all records", precision);
 					return grid;
 				}
 			});
 		} catch (Exception e) {
-			logger.error("Error executing DuckDB taxon grid query", e);
+			logger.error("Error executing DuckDB grid query", e);
 			return new LinkedHashMap<>();
 		}
+	}
+
+	private static final String GEOHASH_BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz";
+
+	/** @return {south, north, west, east} of a geohash cell */
+	private static double[] geohashBounds(String geohash) {
+		double[] lat = { -90, 90 };
+		double[] lon = { -180, 180 };
+		boolean isLon = true;
+		for (char c : geohash.toCharArray()) {
+			int bits = GEOHASH_BASE32.indexOf(c);
+			for (int mask = 16; mask > 0; mask >>= 1) {
+				double[] range = isLon ? lon : lat;
+				double middle = (range[0] + range[1]) / 2;
+				if ((bits & mask) != 0) {
+					range[0] = middle;
+				} else {
+					range[1] = middle;
+				}
+				isLon = !isLon;
+			}
+		}
+		return new double[] { lat[0], lat[1], lon[0], lon[1] };
 	}
 
 	/** Earliest and latest year with a month for one IBP taxon */

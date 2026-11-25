@@ -76,6 +76,18 @@ public interface GBIFObservationService {
 			Integer precision);
 
 	/**
+	 * Record count per geohash cell for all GBIF occurrences inside a bounding box
+	 *
+	 * @param top       North latitude
+	 * @param left      West longitude
+	 * @param bottom    South latitude
+	 * @param right     East longitude
+	 * @param precision Geohash length, 1 to 8
+	 * @return Record count per geohash
+	 */
+	Map<String, Long> getGrid(Double top, Double left, Double bottom, Double right, Integer precision);
+
+	/**
 	 * Count GBIF occurrences matched to an IBP taxon per year and month, for a
 	 * temporal distribution chart. Records without a year or month are left out.
 	 *

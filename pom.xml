@@ -44,12 +44,12 @@
 		<repository>
 			<id>central</id>
 			<name>jfrog-releases</name>
-			<url>https://devartifactory.indiabiodiversity.org/libs-release</url>
+			<url>https://venus.strandls.com/artifactory/libs-release</url>
 		</repository>
 		<snapshotRepository>
 			<id>snapshots</id>
 			<name>jfrog-snapshots</name>
-			<url>https://devartifactory.indiabiodiversity.org/libs-snapshot</url>
+			<url>https://venus.strandls.com/artifactory/libs-snapshot</url>
 		</snapshotRepository>
 	</distributionManagement>
 
@@ -57,7 +57,7 @@
 		<repository>
 			<id>central</id>
 			<name>libs-release</name>
-			<url>https://devartifactory.indiabiodiversity.org/libs-release</url>
+			<url>https://venus.strandls.com/artifactory/libs-release</url>
 			<snapshots>
 				<enabled>false</enabled>
 			</snapshots>
@@ -65,7 +65,7 @@
 		<repository>
 			<id>snapshots</id>
 			<name>libs-snapshot</name>
-			<url>https://devartifactory.indiabiodiversity.org/libs-snapshot</url>
+			<url>https://venus.strandls.com/artifactory/libs-snapshot</url>
 			<snapshots>
 				<enabled>true</enabled>
 			</snapshots>

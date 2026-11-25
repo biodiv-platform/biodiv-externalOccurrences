@@ -154,6 +154,25 @@ public class GBIFObservationController {
 	}
 
 	@GET
+	@Path(ApiConstants.GRID)
+	@Produces(MediaType.APPLICATION_JSON)
+	@Operation(summary = "Get GBIF occurrence grid", description = "Returns record counts per geohash cell inside the bounding box for all GBIF occurrences", responses = {
+			@ApiResponse(responseCode = "200", description = "Success", content = @Content(schema = @Schema(implementation = Map.class))),
+			@ApiResponse(responseCode = "400", description = "Precision out of range", content = @Content(schema = @Schema(implementation = String.class))),
+			@ApiResponse(responseCode = "500", description = "Could not get the data", content = @Content(schema = @Schema(implementation = String.class))) })
+	public Response getGrid(@QueryParam("top") Double top, @QueryParam("left") Double left,
+			@QueryParam("bottom") Double bottom, @QueryParam("right") Double right,
+			@Parameter(description = "Geohash length, 1 to 8") @QueryParam("precision") Integer precision)
+			throws ExternalOccurrencesException {
+		try {
+			Map<String, Long> response = gbifObservationService.getGrid(top, left, bottom, right, precision);
+			return Response.status(Status.OK).entity(response).build();
+		} catch (Exception e) {
+			throw new ExternalOccurrencesException(e);
+		}
+	}
+
+	@GET
 	@Path(ApiConstants.TAXON + "/{taxonId}" + ApiConstants.MONTH_YEAR)
 	@Produces(MediaType.APPLICATION_JSON)
 	@Operation(summary = "Get GBIF occurrence counts per year and month for an IBP taxon", description = "Returns record counts per year and month (records with both) for occurrences matched to the IBP taxon, plus the taxon's earliest and latest year", responses = {

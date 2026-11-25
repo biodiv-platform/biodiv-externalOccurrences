@@ -54,6 +54,16 @@ Content-Type: application/json
 GET /externalOccurrences-api/api/v1/gbif/taxon/164696/grid?top=38&left=65&bottom=5&right=100&precision=4
 ```
 
+### Grid of all records
+
+`GET /v1/gbif/grid` takes the same query params and returns the same `{geohash: count}`, counting every GBIF record in `gbif_parquet_path` rather than one taxon. The IBP homepage map uses it.
+
+```
+GET /externalOccurrences-api/api/v1/gbif/grid?top=38&left=65&bottom=5&right=100&precision=4
+```
+
+A zoomed-out view covers nearly every record, so a query at precision 4 or less would aggregate the whole file each time (about 2 s for 65M records). Instead, the first request at each such precision builds the grid of the whole file and keeps it in memory, and later requests only pick the cells that overlap the bounding box; at those precisions a cell on the edge of the box counts all its records. The grids are kept until the service restarts, so restart it after replacing the parquet file.
+
 Geohashes come from `st_geohash` in the [pintail](https://duckdb.org/community_extensions/extensions/pintail) community extension. pintail needs DuckDB 1.5.5 or later.
 
 ## How the search area is built
